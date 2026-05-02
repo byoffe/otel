@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "otel-transcribe"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4",
+    "pyright>=1.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["otel_common*"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportPrivateImportUsage = false

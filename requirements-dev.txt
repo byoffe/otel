@@ -1,0 +1,3 @@
+# Install the project (otel_common package + runtime deps) in editable mode,
+# plus all dev tools. Run: pip install -r requirements-dev.txt
+-e .[dev]
