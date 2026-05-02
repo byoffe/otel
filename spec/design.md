@@ -275,5 +275,251 @@ via `trace.get_current_span().set_attribute(...)`. No manual `start_span` needed
 - MCP server (Story 3)
 - Claude Code skill and `docker-compose.dev.yml` (Story 4)
 - `Makefile` / `justfile` (Story 4)
-- Seed script (Story 4)
-- Seed script
+- Seed script (Story 3)
+
+---
+
+## Commit 3 — MCP Server + Claude Integration
+
+### Scope
+
+Addresses all Story 3 acceptance criteria:
+- FastMCP server exposing 3 tools backed by `storage-svc`: `list_transcripts`,
+  `get_transcript`, `search_transcripts`
+- OTEL spans emitted for each tool invocation (visible in Tempo alongside pipeline traces)
+- `.claude/mcp.json` wiring so Claude Code can use the tools immediately
+- `scripts/seed.py` to pre-populate `storage-svc` with 5 demo transcripts
+
+### Approach
+
+The MCP server is a thin wrapper over the `storage-svc` REST API. Each tool makes
+an `httpx` call to `storage-svc` and returns structured data. FastMCP handles the
+MCP protocol (JSON-RPC); the application layer is just Python functions decorated
+with `@mcp.tool()`.
+
+OTEL instrumentation is manual: each tool wraps its logic in a
+`tracer.start_as_current_span(...)` context manager and records relevant attributes
+(tool name, query, result count). Since the MCP server emits to the same Collector
+as the pipeline services, AI-triggered queries appear in the same Tempo view as
+pipeline traces — demonstrating that observability spans AI and data-plane work.
+
+Two transport modes, selected by `MCP_TRANSPORT` env var:
+
+- **stdio** (default): Claude Code spawns `python -m mcp_server` as a subprocess
+  via `.claude/mcp.json`. No persistent server needed for local dev. `STORAGE_URL`
+  points at `localhost:8004`.
+- **SSE** (Docker): `MCP_TRANSPORT=sse`; FastMCP binds on `0.0.0.0:8005`; the
+  `mcp-server` Compose service joins the observability network and reaches
+  `storage-svc` at `http://storage:8004`.
+
+The seed script (`scripts/seed.py`) posts 5 representative fake transcripts directly
+to `storage-svc` via `POST /transcripts`. This decouples the MCP demo from running
+the full pipeline and gives Claude realistic data to work with immediately.
+
+### Key Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| MCP library | `fastmcp` | Higher-level than the raw `mcp` SDK; `@mcp.tool()` keeps tool code minimal |
+| Transport default | stdio | Simplest Claude Code integration; no persistent server process needed for local dev |
+| Docker transport | SSE | Long-running container needs a persistent HTTP transport; SSE is FastMCP's built-in option |
+| Storage access | `httpx` calls to `storage-svc` API | MCP server is stateless; avoids duplicating storage models; consistent with pipeline architecture |
+| Search implementation | Client-side filter over list response | No search endpoint in `storage-svc`; fine for a demo with ≤100 transcripts |
+| OTEL context | New root span per tool call | MCP calls don't carry upstream trace context; each invocation starts its own trace |
+| Seed data | Same fake tag/speaker pools as the services | Consistent vocabulary; no external deps |
+
+### File and Component Changes
+
+| File | Change |
+|---|---|
+| `mcp_server/__init__.py` | FastMCP app; `init_otel("mcp-server")`; 3 tools with OTEL spans |
+| `mcp_server/__main__.py` | Entry point: reads `MCP_TRANSPORT`; calls `mcp.run()` or `mcp.run(transport="sse", ...)` |
+| `mcp_server/requirements.txt` | `fastmcp`, `httpx`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc` |
+| `mcp_server/Dockerfile` | `FROM python:3.12-slim`; same build pattern; `CMD ["python", "-m", "mcp_server"]` |
+| `scripts/seed.py` | Posts 5 fake transcripts to `STORAGE_URL`; prints created IDs |
+| `docker-compose.yml` | Add `mcp-server` service with `MCP_TRANSPORT=sse`, port 8005 |
+| `.claude/mcp.json` | Register `transcripts` MCP server; stdio transport; `STORAGE_URL=http://localhost:8004` |
+
+### Tool Contracts
+
+```
+list_transcripts() → list[dict]
+  Returns all stored transcripts (id, filename, tags, summary, created_at).
+  Span attributes: mcp.tool="list_transcripts", mcp.result_count=N
+
+get_transcript(transcript_id: str) → dict
+  Returns the full transcript object for a given ID.
+  Raises a descriptive error if not found (FastMCP surfaces it to Claude as a tool error).
+  Span attributes: mcp.tool="get_transcript", mcp.transcript_id=...
+
+search_transcripts(query: str) → list[dict]
+  Case-insensitive search across filename, tags, and speaker names.
+  Returns matching transcripts (may be empty list).
+  Span attributes: mcp.tool="search_transcripts", mcp.query=..., mcp.result_count=N
+```
+
+### MCP Server Configuration
+
+**Local / Claude Code (stdio)**
+
+`.claude/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "transcripts": {
+      "command": "python",
+      "args": ["-m", "mcp_server"],
+      "env": {
+        "STORAGE_URL": "http://localhost:8004",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317"
+      }
+    }
+  }
+}
+```
+
+**Docker Compose (SSE)**
+
+The `mcp-server` service sets `MCP_TRANSPORT=sse` and exposes port 8005. Claude
+Code can alternatively connect to it via `url: "http://localhost:8005/sse"` in
+`.claude/mcp.json` if the container is running.
+
+### Distributed Trace Shape
+
+```
+[mcp-server]  mcp.list_transcripts     ~30ms
+  [mcp-server]  GET storage:8004/transcripts  (HTTPX auto-instrumented)
+    [storage-svc]  GET /transcripts
+```
+
+Each tool call is a new root trace (no upstream trace context from Claude Code).
+
+### Edge Cases and Failure Modes
+
+- **`storage-svc` not running:** `httpx` raises `ConnectError`; FastMCP returns a
+  tool error to Claude; no crash. Claude should suggest starting the stack.
+- **Empty storage:** `list_transcripts` returns `[]`; `search_transcripts` returns
+  `[]`; Claude should surface this and suggest running `python scripts/seed.py`.
+- **Stdio cold start / flush:** BatchSpanProcessor may not flush before the short-lived
+  stdio process exits. The `__main__.py` calls `force_flush()` on all providers
+  before exit to ensure tool-invocation spans reach Tempo.
+- **Trace context from Claude:** MCP calls arrive without an upstream trace ID; each
+  tool call starts a new root span. Expected — AI queries are a different trace origin
+  from pipeline runs.
+
+### Deferred to Later Commits
+
+- Claude Code skill `/transcripts` (Story 4)
+- `docker-compose.dev.yml` live-reload overlay (Story 4)
+- `Makefile` / `justfile` (Story 4)
+
+---
+
+## Commit 2.5 — Baked-Content Pipeline + `/meeting` Skill
+
+### Scope
+
+- Fix three post-Commit-2 bugs discovered during live testing
+- Suppress health check spans to keep Grafana dashboard clean
+- Add an optional baked-content path through the full pipeline so a Claude skill
+  can inject pre-written conversations without breaking the distributed trace
+- Add `.claude/skills/meeting/` Claude Code skill: generate a spoken conversation
+  on any topic and POST it through the pipeline; search stored transcripts
+
+### Approach
+
+#### Bug fixes
+
+Three bugs surfaced when running the Commit 2 stack on a clean machine:
+
+1. **`wget` not in `python:3.12-slim`** — all five service healthchecks used
+   `wget` which is absent from the slim image. Fixed by replacing each healthcheck
+   `test` with `python -c "import urllib.request; urllib.request.urlopen(...)"`.
+
+2. **`httpx 1.0.dev3` breaking change** — pip's `--pre` flag (present in some
+   Dockerfiles) caused the pre-release `httpx 1.0.dev3` to be installed, which
+   removed `httpx.BaseTransport`. Fixed by pinning `httpx>=0.27.0,<1.0` in
+   `services/gateway/requirements.txt`.
+
+3. **`filename` is a reserved `LogRecord` attribute** — `logger.info(...,
+   extra={"filename": body.filename})` raised `KeyError` at runtime because
+   Python's `LogRecord` already has a `filename` field. Fixed by renaming the
+   extra field to `audio_file` in gateway.
+
+#### Health check span suppression
+
+With the pipeline running, the Grafana "Recent Pipeline Traces" panel was filled
+with `GET /health` traces from Docker's healthcheck probes. Two changes fix this:
+
+- Add `OTEL_PYTHON_EXCLUDED_URLS=health` environment variable to all five app
+  services in `docker-compose.yml`. The OTEL Python SDK reads this at startup and
+  skips span creation for any URL matching the pattern.
+- Update the Grafana dashboard Tempo query from `{}` to `{name !~ ".*health.*"}`
+  and the Loki log panel selector from `{job="otel-smoke"}` to `{job=~".+-svc"}`.
+
+The `excluded_urls` parameter on `FastAPIInstrumentor.instrument_app()` was also
+tried but proved unreliable in the installed SDK version; the env var is the
+authoritative fix.
+
+#### Baked-content pipeline path
+
+The five services simulate their work (random delays, fake text, random speakers,
+random tags). To let a Claude skill inject real conversations while still running
+the full pipeline and emitting OTEL spans, an optional `content` field is added
+to `POST /jobs`. When present, each service uses the pre-baked values instead of
+simulating:
+
+- **gateway**: adds `ConversationContent` model; passes `baked_text`,
+  `baked_speakers`, `baked_tags`, `baked_summary` to each downstream call
+- **transcription**: if `baked_text` present, uses it verbatim; skips fake generation
+- **diarization**: if `baked_speakers` present, creates real `Speaker` objects and
+  counts actual dialogue turns instead of randomizing
+- **indexing**: if both `baked_tags` and `baked_summary` present, uses them;
+  sets `tokens_used = len(text.split()) * 2`
+- **storage**: adds `summary` field to `TranscriptSummary` so the `/meeting search`
+  mode can filter on it
+
+All services still execute, sleep, and emit spans — the distributed trace is
+unchanged. Only the content is pre-baked.
+
+#### `/meeting` Claude Code skill
+
+A directory-per-skill layout under `.claude/skills/meeting/` following the
+Anthropic skill spec:
+
+- `SKILL.md`: frontmatter with `name`, `description`, `when_to_use`,
+  `argument-hint`, `arguments` (topic, participants, search), `user-invocable: true`,
+  `allowed-tools: "Write Bash(python *)"`. Two modes documented: Generate and Search.
+- `scripts/post_meeting.py`: template script with a placeholder `PAYLOAD` dict.
+  Claude fills it in and writes the result to `/tmp/meeting_post.py`, then runs it.
+- `scripts/search_transcripts.py`: fetches `GET /transcripts` from storage-svc and
+  filters by query against tags, filename, and summary.
+
+The `Write` tool is retained in `allowed-tools` because Generate mode writes the
+filled-in script to `/tmp/` before running it.
+
+### Key Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Baked-content transport | Optional `content` field on `POST /jobs` | Single entry point; all services opt-in gracefully; no new endpoints or routes |
+| Storage `summary` in list response | Add to `TranscriptSummary` model | Enables the `/meeting search` skill to filter on outcome text, not just tags |
+| Skill script temp path | `/tmp/meeting_post.py` | Avoids mutating the committed template; clean slate each invocation |
+| Health span suppression | Env var `OTEL_PYTHON_EXCLUDED_URLS` | More reliable than the `excluded_urls` kwarg in the installed SDK version |
+| Skill script separator char | ASCII `--` instead of `──` | Windows cp1252 codec cannot encode box-drawing characters; plain ASCII is safe |
+
+### File and Component Changes
+
+| File | Change |
+|---|---|
+| `docker-compose.yml` | All 5 app services: healthcheck `wget` → `python urllib`; add `OTEL_PYTHON_EXCLUDED_URLS=health` |
+| `services/gateway/requirements.txt` | Pin `httpx>=0.27.0,<1.0` |
+| `services/gateway/main.py` | `filename` log field → `audio_file`; add `ConversationContent` model; pass baked fields downstream |
+| `services/transcription/main.py` | Accept `baked_text`; use verbatim when present |
+| `services/diarization/main.py` | Accept `baked_speakers`; build real `Speaker` objects and count dialogue turns |
+| `services/indexing/main.py` | Accept `baked_tags`, `baked_summary`; use when both present |
+| `services/storage/main.py` | Add `summary` to `TranscriptSummary` model and list endpoint |
+| `infra/grafana/dashboards/otel-overview.json` | Trace query `{name !~ ".*health.*"}`; log selector `{job=~".+-svc"}`; version bump |
+| `.claude/skills/meeting/SKILL.md` | Skill entrypoint: frontmatter + Generate/Search mode instructions |
+| `.claude/skills/meeting/scripts/post_meeting.py` | Template POST script |
+| `.claude/skills/meeting/scripts/search_transcripts.py` | Transcript search script (ASCII separator for Windows compat) |

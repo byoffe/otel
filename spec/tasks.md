@@ -172,3 +172,97 @@
 - The JSON `StreamHandler` added to `otel_common` writes to stdout — visible via
   `docker compose logs <service>` — and is separate from the OTLP log path to Loki.
   Both run in parallel; stdout is for developer convenience, OTLP is for Grafana.
+
+---
+
+---
+
+## Commit 2.5 — Baked-Content Pipeline + `/meeting` Skill
+
+### Bug fixes
+
+- ✅ 1. Replace `wget` healthchecks with `python -c "import urllib.request; urllib.request.urlopen(...)"` in all five app services in `docker-compose.yml` (python:3.12-slim has no wget)
+- ✅ 2. Pin `httpx>=0.27.0,<1.0` in `services/gateway/requirements.txt` to prevent pip from installing the breaking pre-release httpx 1.0.dev3
+- ✅ 3. Rename `extra={"filename": ...}` → `extra={"audio_file": ...}` in `services/gateway/main.py` to avoid collision with the reserved `LogRecord.filename` attribute
+
+### Health check span suppression
+
+- ✅ 4. Add `OTEL_PYTHON_EXCLUDED_URLS=health` environment variable to all five app services in `docker-compose.yml`
+- ✅ 5. Update `infra/grafana/dashboards/otel-overview.json`: trace panel query `{}` → `{name !~ ".*health.*"}`; log panel selector `{job="otel-smoke"}` → `{job=~".+-svc"}`; bump dashboard version
+
+### Baked-content pipeline
+
+- ✅ 6. Add `ConversationContent` Pydantic model and optional `content: ConversationContent | None` field to `JobRequest` in `services/gateway/main.py`; pass `baked_text`, `baked_speakers`, `baked_tags`, `baked_summary` in downstream service calls when present
+- ✅ 7. Add `baked_text: str | None = None` to `TranscribeRequest` in `services/transcription/main.py`; use verbatim when present, skipping fake generation
+- ✅ 8. Add `baked_speakers: list[dict[str, Any]] | None = None` to `DiarizeRequest` in `services/diarization/main.py`; build real `Speaker` objects and count actual dialogue turns when present
+- ✅ 9. Add `baked_tags` and `baked_summary` fields to `IndexRequest` in `services/indexing/main.py`; use both when present; set `tokens_used = len(text.split()) * 2`
+- ✅ 10. Add `summary: str` to `TranscriptSummary` model and `GET /transcripts` list response in `services/storage/main.py`
+
+### `/meeting` Claude Code skill
+
+- ✅ 11. Create `.claude/skills/meeting/SKILL.md` with full frontmatter (`name`, `description`, `when_to_use`, `argument-hint`, `arguments` block for topic/participants/search, `user-invocable: true`, `allowed-tools`) and two-mode (Generate / Search) instructions using `${CLAUDE_SKILL_DIR}/scripts/` paths
+- ✅ 12. Create `.claude/skills/meeting/scripts/post_meeting.py`: placeholder `PAYLOAD` template that Claude fills in and POSTs to `http://localhost:8000/jobs`
+- ✅ 13. Create `.claude/skills/meeting/scripts/search_transcripts.py`: fetches `GET /transcripts` and filters by query against tags, filename, and summary; uses ASCII `--` separator for Windows cp1252 compatibility
+
+## Notes
+
+- The baked-content path is fully opt-in: omitting `content` from `POST /jobs` leaves all five services in random-simulation mode. No existing behavior changes.
+- Health span suppression confirmed working: same trace IDs in consecutive Tempo queries 15 s apart after adding `OTEL_PYTHON_EXCLUDED_URLS`.
+- `search_transcripts.py` uses ASCII `--` (not `──`) because Python 3.14 on Windows defaults to cp1252, which cannot encode box-drawing characters.
+
+---
+
+## Commit 3 — MCP Server + Claude Integration
+
+### MCP server
+
+- [ ] 1. Create `mcp_server/requirements.txt`: `fastmcp`, `httpx`,
+         `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc`
+- [ ] 2. Create `mcp_server/Dockerfile`: same pattern as service Dockerfiles;
+         build context = repo root; `COPY otel_common/`; `CMD ["python", "-m", "mcp_server"]`
+- [ ] 3. Create `mcp_server/__init__.py`: FastMCP app with `init_otel("mcp-server")`;
+         define `list_transcripts`, `get_transcript(transcript_id)`,
+         `search_transcripts(query)` tools; each tool opens a
+         `tracer.start_as_current_span(...)` with `mcp.tool` and result-count attributes;
+         `httpx` calls go to `STORAGE_URL` env var (default `http://localhost:8004`)
+- [ ] 4. Create `mcp_server/__main__.py`: reads `MCP_TRANSPORT` env var (default `stdio`);
+         calls `mcp.run()` for stdio or `mcp.run(transport="sse", host="0.0.0.0", port=8005)`
+         for SSE; calls `force_flush()` on all OTEL providers before exit
+
+### Seed script
+
+- [ ] 5. Create `scripts/seed.py`: builds 5 fake transcript dicts (id, filename, text,
+         speakers, tags, summary) drawn from the same pools as the service simulators;
+         posts each to `STORAGE_URL/transcripts` via `httpx`; prints the IDs created
+
+### Docker Compose and MCP config
+
+- [ ] 6. Add `mcp-server` service to `docker-compose.yml`: build context = repo root,
+         `dockerfile: mcp_server/Dockerfile`; env `MCP_TRANSPORT=sse`,
+         `STORAGE_URL=http://storage:8004`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317`;
+         port 8005; `depends_on: storage: condition: service_healthy`
+- [ ] 7. Create `.claude/mcp.json`: register server named `transcripts` with
+         `command: "python"`, `args: ["-m", "mcp_server"]`,
+         `env: { STORAGE_URL: "http://localhost:8004", OTEL_EXPORTER_OTLP_ENDPOINT: "http://localhost:4317" }`
+
+### Verification
+
+- [ ] 8. Run `python scripts/seed.py` with stack up; confirm 5 records returned by
+         `Invoke-RestMethod http://localhost:8004/transcripts`
+- [ ] 9. In Claude Code, invoke the `transcripts` MCP tool: ask "what transcripts are
+         available?" — confirm Claude lists IDs drawn from `storage-svc`
+- [ ] 10. Ask Claude to retrieve and summarize a specific transcript ID — confirm
+          `get_transcript` tool is invoked and Claude returns the content
+- [ ] 11. In Tempo, confirm tool-invocation traces appear as separate root spans
+          with `service.name = "mcp-server"`
+
+## Notes
+
+- `.claude/mcp.json` uses stdio transport; Claude Code spawns `python -m mcp_server`
+  as a subprocess. `STORAGE_URL=http://localhost:8004` reaches the Compose-exposed port.
+- For the Docker SSE path, Claude Code can instead use `url: "http://localhost:8005/sse"`
+  in `.claude/mcp.json` if the full stack is running.
+- `force_flush()` in `__main__.py` is important for stdio mode: the process is
+  short-lived and BatchSpanProcessor won't drain naturally before exit.
+- `search_transcripts` does client-side filtering over the `list` response — good
+  enough for a demo; documents why a dedicated search endpoint isn't needed yet.
