@@ -212,57 +212,72 @@
 
 ---
 
-## Commit 3 — MCP Server + Claude Integration
+## Commit 3 — Pipeline Analyst MCP + Grafana MCP Integration
 
-### MCP server
+### pipeline-analyst MCP server
 
-- [ ] 1. Create `mcp_server/requirements.txt`: `fastmcp`, `httpx`,
-         `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc`
-- [ ] 2. Create `mcp_server/Dockerfile`: same pattern as service Dockerfiles;
-         build context = repo root; `COPY otel_common/`; `CMD ["python", "-m", "mcp_server"]`
-- [ ] 3. Create `mcp_server/__init__.py`: FastMCP app with `init_otel("mcp-server")`;
-         define `list_transcripts`, `get_transcript(transcript_id)`,
-         `search_transcripts(query)` tools; each tool opens a
-         `tracer.start_as_current_span(...)` with `mcp.tool` and result-count attributes;
-         `httpx` calls go to `STORAGE_URL` env var (default `http://localhost:8004`)
-- [ ] 4. Create `mcp_server/__main__.py`: reads `MCP_TRANSPORT` env var (default `stdio`);
-         calls `mcp.run()` for stdio or `mcp.run(transport="sse", host="0.0.0.0", port=8005)`
-         for SSE; calls `force_flush()` on all OTEL providers before exit
+- [ ] 1. Create `mcp_server/requirements.txt`: `fastmcp>=2.0`, `httpx>=0.27.0,<1.0`,
+         `opentelemetry-sdk>=1.24.0`, `opentelemetry-exporter-otlp-proto-grpc>=1.24.0`
+- [ ] 2. Create `mcp_server/Dockerfile`: `FROM python:3.12-slim`; build context = repo root;
+         `COPY otel_common/ ./otel_common/`; install requirements; `COPY mcp_server/ ./mcp_server/`;
+         `CMD ["python", "-m", "mcp_server"]`
+- [ ] 3. Create `mcp_server/__init__.py`: FastMCP app `pipeline-analyst`; `init_otel("mcp-server")`;
+         `TEMPO_URL` from env (default `http://localhost:3200`); 4 tools, each wrapped in
+         `tracer.start_as_current_span(...)` with `mcp.tool` + result-count attributes:
+         - `list_recent_jobs(limit=20)`: `GET /api/search?q={rootName="POST /jobs"}&limit=N`
+         - `get_trace_breakdown(trace_id)`: `GET /api/traces/{id}`; filter `SPAN_KIND_SERVER`
+           spans per service; return `{total_ms, services: {svc: dur_ms, gateway-overhead-ms: N}}`
+         - `find_slow_jobs(threshold_ms=3000)`: TraceQL `{rootName="POST /jobs" && duration > Nms}`
+         - `find_error_jobs()`: TraceQL `{rootName="POST /jobs" && status=error}`
+- [ ] 4. Create `mcp_server/__main__.py`: read `MCP_TRANSPORT` (default `stdio`);
+         call `mcp.run()` or `mcp.run(transport="sse", host="0.0.0.0", port=8005)`;
+         `finally: force_flush()` on TracerProvider and MeterProvider
 
 ### Seed script
 
-- [ ] 5. Create `scripts/seed.py`: builds 5 fake transcript dicts (id, filename, text,
-         speakers, tags, summary) drawn from the same pools as the service simulators;
-         posts each to `STORAGE_URL/transcripts` via `httpx`; prints the IDs created
+- [ ] 5. Create `scripts/seed.py`: define 5 diverse transcript dicts (different topics,
+         tags, speakers); post each to `STORAGE_URL/transcripts` via `urllib.request`;
+         print created IDs and filenames
 
 ### Docker Compose and MCP config
 
-- [ ] 6. Add `mcp-server` service to `docker-compose.yml`: build context = repo root,
-         `dockerfile: mcp_server/Dockerfile`; env `MCP_TRANSPORT=sse`,
-         `STORAGE_URL=http://storage:8004`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317`;
-         port 8005; `depends_on: storage: condition: service_healthy`
-- [ ] 7. Create `.claude/mcp.json`: register server named `transcripts` with
-         `command: "python"`, `args: ["-m", "mcp_server"]`,
-         `env: { STORAGE_URL: "http://localhost:8004", OTEL_EXPORTER_OTLP_ENDPOINT: "http://localhost:4317" }`
+- [ ] 6. Add `pipeline-analyst` service to `docker-compose.yml`: build at repo root,
+         `dockerfile: mcp_server/Dockerfile`; env `MCP_TRANSPORT=sse`, `MCP_PORT=8005`,
+         `TEMPO_URL=http://tempo:3200`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317`;
+         port 8005; `depends_on: tempo: condition: service_healthy`
+- [ ] 7. Add `mcp-grafana` service to `docker-compose.yml` under `profiles: [mcp-grafana]`:
+         `image: ghcr.io/grafana/mcp-grafana:latest`; env `GRAFANA_URL=http://grafana:3000`,
+         `GRAFANA_USERNAME=admin`, `GRAFANA_PASSWORD=admin`; port 3001;
+         `depends_on: grafana`
+- [ ] 8. Create `.claude/mcp.json`: register `pipeline-analyst` (stdio, `python -m mcp_server`,
+         `TEMPO_URL=http://localhost:3200`); register `grafana` (stdio via
+         `docker run --rm -i -e GRAFANA_URL=http://host.docker.internal:3000 ... ghcr.io/grafana/mcp-grafana:latest`)
+- [ ] 9. Add `fastmcp>=2.0` and `httpx>=0.27.0,<1.0` to `[project.optional-dependencies] dev`
+         in `pyproject.toml` so `python -m mcp_server` works from the dev venv
 
 ### Verification
 
-- [ ] 8. Run `python scripts/seed.py` with stack up; confirm 5 records returned by
-         `Invoke-RestMethod http://localhost:8004/transcripts`
-- [ ] 9. In Claude Code, invoke the `transcripts` MCP tool: ask "what transcripts are
-         available?" — confirm Claude lists IDs drawn from `storage-svc`
-- [ ] 10. Ask Claude to retrieve and summarize a specific transcript ID — confirm
-          `get_transcript` tool is invoked and Claude returns the content
-- [ ] 11. In Tempo, confirm tool-invocation traces appear as separate root spans
-          with `service.name = "mcp-server"`
+- [ ] 10. `python scripts/seed.py` — confirm 5 IDs printed and
+          `Invoke-RestMethod http://localhost:8004/transcripts` returns 5 records
+- [ ] 11. `python -m mcp_server` (in a separate terminal) — confirm it starts without error
+          and exits cleanly (stdio mode)
+- [ ] 12. Ask Claude: "list recent pipeline jobs and tell me which was slowest" — confirm
+          `list_recent_jobs` and `get_trace_breakdown` tools are invoked
+- [ ] 13. Ask Claude: "find any jobs that took over 2 seconds" — confirm `find_slow_jobs`
+          tool is invoked with `threshold_ms=2000`
+- [ ] 14. In Tempo, confirm `pipeline-analyst` traces appear as separate root spans with
+          `service.name="mcp-server"` alongside the pipeline `gateway-svc` traces
+- [ ] 15. `docker compose up --build -d` — confirm `pipeline-analyst` container starts healthy
 
 ## Notes
 
-- `.claude/mcp.json` uses stdio transport; Claude Code spawns `python -m mcp_server`
-  as a subprocess. `STORAGE_URL=http://localhost:8004` reaches the Compose-exposed port.
-- For the Docker SSE path, Claude Code can instead use `url: "http://localhost:8005/sse"`
-  in `.claude/mcp.json` if the full stack is running.
-- `force_flush()` in `__main__.py` is important for stdio mode: the process is
-  short-lived and BatchSpanProcessor won't drain naturally before exit.
-- `search_transcripts` does client-side filtering over the `list` response — good
-  enough for a demo; documents why a dedicated search endpoint isn't needed yet.
+- `python -m mcp_server` works from the repo root because `mcp_server/` is a package
+  (has `__init__.py` + `__main__.py`). `TEMPO_URL` defaults to `http://localhost:3200`.
+- `force_flush()` in `__main__.py` is critical for stdio mode: the process exits
+  after each tool call and BatchSpanProcessor won't drain naturally.
+- `get_trace_breakdown` filters to `SPAN_KIND_SERVER` spans to get clean per-service
+  wall-clock times. The gateway has one SERVER span (the total) + CLIENT spans (outgoing
+  calls); only the SERVER span is included, and gateway overhead is computed as
+  `gateway_total - sum(downstream_server_spans)`.
+- The `grafana` MCP entry uses `docker run --rm -i` (stdio), which pulls the image on
+  first use. On Linux hosts, replace `host.docker.internal` with the host LAN IP.

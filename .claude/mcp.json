@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "pipeline-analyst": {
+      "command": "python",
+      "args": ["-m", "mcp_server"],
+      "env": {
+        "TEMPO_URL": "http://localhost:3200",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317"
+      }
+    },
+    "grafana": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "GRAFANA_URL=http://host.docker.internal:3000",
+        "-e", "GRAFANA_USERNAME=admin",
+        "-e", "GRAFANA_PASSWORD=admin",
+        "ghcr.io/grafana/mcp-grafana:latest"
+      ]
+    }
+  }
+}

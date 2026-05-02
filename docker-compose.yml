@@ -206,6 +206,42 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── MCP servers ─────────────────────────────────────────────────────────────
+
+  pipeline-analyst:
+    build:
+      context: .
+      dockerfile: mcp_server/Dockerfile
+    environment:
+      - MCP_TRANSPORT=sse
+      - MCP_PORT=8005
+      - TEMPO_URL=http://tempo:3200
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    ports:
+      - "8005:8005"   # pipeline-analyst MCP SSE endpoint
+    networks:
+      - observability
+    depends_on:
+      tempo:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+  mcp-grafana:
+    image: ghcr.io/grafana/mcp-grafana:latest
+    environment:
+      - GRAFANA_URL=http://grafana:3000
+      - GRAFANA_USERNAME=admin
+      - GRAFANA_PASSWORD=admin
+    ports:
+      - "3001:3001"   # Grafana MCP SSE endpoint
+    networks:
+      - observability
+    depends_on:
+      - grafana
+    profiles:
+      - mcp-grafana   # opt-in: docker compose --profile mcp-grafana up
+
   gateway:
     build:
       context: .

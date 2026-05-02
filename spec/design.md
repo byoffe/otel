@@ -279,133 +279,159 @@ via `trace.get_current_span().set_attribute(...)`. No manual `start_span` needed
 
 ---
 
-## Commit 3 — MCP Server + Claude Integration
+## Commit 3 — Pipeline Analyst MCP + Grafana MCP Integration
 
 ### Scope
 
-Addresses all Story 3 acceptance criteria:
-- FastMCP server exposing 3 tools backed by `storage-svc`: `list_transcripts`,
-  `get_transcript`, `search_transcripts`
-- OTEL spans emitted for each tool invocation (visible in Tempo alongside pipeline traces)
-- `.claude/mcp.json` wiring so Claude Code can use the tools immediately
-- `scripts/seed.py` to pre-populate `storage-svc` with 5 demo transcripts
+Replaces the original storage-wrapping MCP design with an observability-first approach:
+
+- **Custom `pipeline-analyst` MCP** (FastMCP, Python): 4 tools that query the
+  Tempo HTTP API directly, enabling Claude to find slow jobs, diagnose bottlenecks,
+  and surface errors using real trace data
+- **`grafana/mcp-grafana`** (official Grafana-maintained server): wired into
+  `.claude/mcp.json` so Claude can query dashboards, Prometheus metrics, and Loki
+  logs through the same Grafana instance — no custom code
+- **`scripts/seed.py`**: posts 5 diverse demo transcripts to `storage-svc` so the
+  stack has realistic data to analyze immediately
+
+Together these create a full diagnostic loop:
+1. `/meeting` generates a conversation → pipeline runs → spans appear in Tempo
+2. Claude queries `pipeline-analyst` tools: "which jobs were slow? what's the bottleneck?"
+3. Claude queries `grafana` tools: "show me the error rate metric" or "find logs for trace X"
 
 ### Approach
 
-The MCP server is a thin wrapper over the `storage-svc` REST API. Each tool makes
-an `httpx` call to `storage-svc` and returns structured data. FastMCP handles the
-MCP protocol (JSON-RPC); the application layer is just Python functions decorated
-with `@mcp.tool()`.
+#### pipeline-analyst MCP
 
-OTEL instrumentation is manual: each tool wraps its logic in a
-`tracer.start_as_current_span(...)` context manager and records relevant attributes
-(tool name, query, result count). Since the MCP server emits to the same Collector
-as the pipeline services, AI-triggered queries appear in the same Tempo view as
-pipeline traces — demonstrating that observability spans AI and data-plane work.
+Four tools backed directly by Tempo's HTTP API (port 3200). Each tool wraps its
+logic in a `tracer.start_as_current_span(...)` block — the resulting spans are
+exported to the OTEL Collector alongside pipeline traces, so Claude's diagnostic
+queries appear in Tempo as their own root traces.
 
-Two transport modes, selected by `MCP_TRANSPORT` env var:
+The Tempo TraceQL search API accepts queries like
+`{rootName="POST /jobs" && duration > 2000ms}` and returns trace summaries with
+`traceID`, `durationMs`, and `rootServiceName`. The trace-detail API
+(`GET /api/traces/{id}`) returns full span trees as OTLP protobuf JSON.
 
-- **stdio** (default): Claude Code spawns `python -m mcp_server` as a subprocess
-  via `.claude/mcp.json`. No persistent server needed for local dev. `STORAGE_URL`
-  points at `localhost:8004`.
-- **SSE** (Docker): `MCP_TRANSPORT=sse`; FastMCP binds on `0.0.0.0:8005`; the
-  `mcp-server` Compose service joins the observability network and reaches
-  `storage-svc` at `http://storage:8004`.
+For the `get_trace_breakdown` tool, spans are filtered to `SPAN_KIND_SERVER` only
+(the actual request handler per service, not gateway's outgoing CLIENT spans).
+This gives a clean per-service wall-clock time that Claude can reason about:
+*"indexing-svc took 1.2s, everything else was under 500ms."*
 
-The seed script (`scripts/seed.py`) posts 5 representative fake transcripts directly
-to `storage-svc` via `POST /transcripts`. This decouples the MCP demo from running
-the full pipeline and gives Claude realistic data to work with immediately.
+Transport: stdio by default (Claude Code spawns `python -m mcp_server`). Docker
+Compose adds it as an SSE service on port 8005 for use in longer-running sessions.
+`__main__.py` calls `force_flush()` on exit to ensure spans reach Tempo even in
+the short-lived stdio process.
+
+#### grafana/mcp-grafana
+
+The Grafana-maintained MCP server (image: `ghcr.io/grafana/mcp-grafana`) wraps
+Grafana's HTTP API. Configured via environment variables
+(`GRAFANA_URL`, `GRAFANA_USERNAME`, `GRAFANA_PASSWORD`). In `.claude/mcp.json`
+it runs as a stdio subprocess via `docker run --rm -i`, which pulls the image on
+first use and requires no separate service.
+
+An optional Docker Compose profile (`mcp-grafana`) is provided for persistent SSE
+sessions; Claude Code can switch between stdio docker run and the SSE URL.
 
 ### Key Decisions
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| MCP library | `fastmcp` | Higher-level than the raw `mcp` SDK; `@mcp.tool()` keeps tool code minimal |
-| Transport default | stdio | Simplest Claude Code integration; no persistent server process needed for local dev |
-| Docker transport | SSE | Long-running container needs a persistent HTTP transport; SSE is FastMCP's built-in option |
-| Storage access | `httpx` calls to `storage-svc` API | MCP server is stateless; avoids duplicating storage models; consistent with pipeline architecture |
-| Search implementation | Client-side filter over list response | No search endpoint in `storage-svc`; fine for a demo with ≤100 transcripts |
-| OTEL context | New root span per tool call | MCP calls don't carry upstream trace context; each invocation starts its own trace |
-| Seed data | Same fake tag/speaker pools as the services | Consistent vocabulary; no external deps |
-
-### File and Component Changes
-
-| File | Change |
-|---|---|
-| `mcp_server/__init__.py` | FastMCP app; `init_otel("mcp-server")`; 3 tools with OTEL spans |
-| `mcp_server/__main__.py` | Entry point: reads `MCP_TRANSPORT`; calls `mcp.run()` or `mcp.run(transport="sse", ...)` |
-| `mcp_server/requirements.txt` | `fastmcp`, `httpx`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc` |
-| `mcp_server/Dockerfile` | `FROM python:3.12-slim`; same build pattern; `CMD ["python", "-m", "mcp_server"]` |
-| `scripts/seed.py` | Posts 5 fake transcripts to `STORAGE_URL`; prints created IDs |
-| `docker-compose.yml` | Add `mcp-server` service with `MCP_TRANSPORT=sse`, port 8005 |
-| `.claude/mcp.json` | Register `transcripts` MCP server; stdio transport; `STORAGE_URL=http://localhost:8004` |
+| MCP target | Tempo (traces) not storage-svc (data) | Traces are the core observability artifact; wrapping storage-svc would duplicate the `/meeting search` skill |
+| Tool granularity | 4 focused tools vs. one generic query | Named tools (`find_slow_jobs`, `get_trace_breakdown`) let Claude answer diagnostic questions without writing TraceQL |
+| Span filter in breakdown | `SPAN_KIND_SERVER` only | Eliminates gateway's outgoing CLIENT spans from per-service timing; gives clean wall-clock per service |
+| Gateway overhead | `total - sum(downstream)` | Surfaces routing/serialization cost without parsing every span |
+| Grafana MCP transport | stdio via `docker run` in mcp.json | No extra port; image pulled on demand; works even if the compose stack isn't running |
+| Compose grafana-mcp | Optional profile | Users who want persistent SSE can enable it without breaking the default stack |
+| OTEL context | New root span per tool call | MCP invocations carry no upstream context; each diagnostic query is its own trace root |
+| Seed data | 5 diverse transcripts with realistic tags | Demonstrates search and filtering across varied topics without running the full pipeline |
 
 ### Tool Contracts
 
 ```
-list_transcripts() → list[dict]
-  Returns all stored transcripts (id, filename, tags, summary, created_at).
-  Span attributes: mcp.tool="list_transcripts", mcp.result_count=N
+list_recent_jobs(limit=20) → list[dict]
+  Searches Tempo for recent POST /jobs traces.
+  Returns: [{trace_id, duration_ms, started_at, root_service}]
+  Span: mcp.tool="list_recent_jobs", mcp.result_count=N
 
-get_transcript(transcript_id: str) → dict
-  Returns the full transcript object for a given ID.
-  Raises a descriptive error if not found (FastMCP surfaces it to Claude as a tool error).
-  Span attributes: mcp.tool="get_transcript", mcp.transcript_id=...
+get_trace_breakdown(trace_id) → dict
+  Fetches full trace from Tempo; extracts SERVER span per service.
+  Returns: {trace_id, total_ms, services: {svc: dur_ms, gateway-overhead-ms: N}}
+  Span: mcp.tool="get_trace_breakdown", mcp.trace_id=...
 
-search_transcripts(query: str) → list[dict]
-  Case-insensitive search across filename, tags, and speaker names.
-  Returns matching transcripts (may be empty list).
-  Span attributes: mcp.tool="search_transcripts", mcp.query=..., mcp.result_count=N
+find_slow_jobs(threshold_ms=3000) → list[dict]
+  TraceQL: {rootName="POST /jobs" && duration > Nms}
+  Returns: [{trace_id, duration_ms}]
+  Span: mcp.tool="find_slow_jobs", mcp.threshold_ms=N, mcp.result_count=N
+
+find_error_jobs() → list[dict]
+  TraceQL: {rootName="POST /jobs" && status=error}
+  Returns: [{trace_id, duration_ms}]
+  Span: mcp.tool="find_error_jobs", mcp.result_count=N
 ```
 
-### MCP Server Configuration
+### MCP Configuration (`.claude/mcp.json`)
 
-**Local / Claude Code (stdio)**
-
-`.claude/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "transcripts": {
+    "pipeline-analyst": {
       "command": "python",
       "args": ["-m", "mcp_server"],
       "env": {
-        "STORAGE_URL": "http://localhost:8004",
+        "TEMPO_URL": "http://localhost:3200",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317"
       }
+    },
+    "grafana": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i",
+        "-e", "GRAFANA_URL=http://host.docker.internal:3000",
+        "-e", "GRAFANA_USERNAME=admin",
+        "-e", "GRAFANA_PASSWORD=admin",
+        "ghcr.io/grafana/mcp-grafana:latest"
+      ]
     }
   }
 }
 ```
 
-**Docker Compose (SSE)**
-
-The `mcp-server` service sets `MCP_TRANSPORT=sse` and exposes port 8005. Claude
-Code can alternatively connect to it via `url: "http://localhost:8005/sse"` in
-`.claude/mcp.json` if the container is running.
-
-### Distributed Trace Shape
+### Distributed Trace Shapes
 
 ```
-[mcp-server]  mcp.list_transcripts     ~30ms
-  [mcp-server]  GET storage:8004/transcripts  (HTTPX auto-instrumented)
-    [storage-svc]  GET /transcripts
+[mcp-server]  mcp.list_recent_jobs      ~40ms
+  [mcp-server]  GET tempo:3200/api/search   (httpx, auto-instrumented)
+
+[mcp-server]  mcp.get_trace_breakdown   ~30ms
+  [mcp-server]  GET tempo:3200/api/traces/{id}
+
+[mcp-server]  mcp.find_slow_jobs        ~40ms
+  [mcp-server]  GET tempo:3200/api/search   (TraceQL with duration filter)
 ```
 
-Each tool call is a new root trace (no upstream trace context from Claude Code).
+Each tool call is a new root trace, visible in Tempo alongside pipeline traces.
+
+### File and Component Changes
+
+| File | Change |
+|---|---|
+| `mcp_server/__init__.py` | FastMCP app; `init_otel("mcp-server")`; 4 tools; Tempo HTTP client |
+| `mcp_server/__main__.py` | Entry point; reads `MCP_TRANSPORT`; `force_flush()` on exit |
+| `mcp_server/requirements.txt` | `fastmcp`, `httpx`, OTEL SDK + OTLP exporter |
+| `mcp_server/Dockerfile` | Same pattern as services; `CMD ["python", "-m", "mcp_server"]` |
+| `scripts/seed.py` | Posts 5 diverse transcripts directly to `storage-svc /transcripts` |
+| `.claude/mcp.json` | `pipeline-analyst` (stdio) + `grafana` (docker run stdio) |
+| `docker-compose.yml` | Add `pipeline-analyst` service (SSE, port 8005); add `mcp-grafana` service under `mcp-grafana` profile |
+| `pyproject.toml` | Add `fastmcp` and `httpx` to dev deps so `python -m mcp_server` works from venv |
 
 ### Edge Cases and Failure Modes
 
-- **`storage-svc` not running:** `httpx` raises `ConnectError`; FastMCP returns a
-  tool error to Claude; no crash. Claude should suggest starting the stack.
-- **Empty storage:** `list_transcripts` returns `[]`; `search_transcripts` returns
-  `[]`; Claude should surface this and suggest running `python scripts/seed.py`.
-- **Stdio cold start / flush:** BatchSpanProcessor may not flush before the short-lived
-  stdio process exits. The `__main__.py` calls `force_flush()` on all providers
-  before exit to ensure tool-invocation spans reach Tempo.
-- **Trace context from Claude:** MCP calls arrive without an upstream trace ID; each
-  tool call starts a new root span. Expected — AI queries are a different trace origin
-  from pipeline runs.
+- **Tempo not running:** `httpx.ConnectError` propagates as a FastMCP tool error; Claude sees the message and can suggest `docker compose up tempo`.
+- **No traces in Tempo:** `list_recent_jobs` returns `[]`; Claude should suggest running `/meeting topic=...` to generate some.
+- **Short-lived stdio process (spans not flushed):** `__main__.py` calls `TracerProvider.force_flush()` in a `finally` block; spans reliably reach Tempo.
+- **mcp-grafana image pull on first use:** `docker run` fetches `ghcr.io/grafana/mcp-grafana:latest` on first invocation; subsequent calls use the local cache.
+- **`host.docker.internal` on Linux:** Not automatically resolved on Linux Docker. The `.claude/mcp.json` comment notes to substitute the host's LAN IP if needed.
 
 ### Deferred to Later Commits
 
