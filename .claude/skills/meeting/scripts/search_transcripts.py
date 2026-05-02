@@ -47,7 +47,7 @@ def main() -> None:
         return
 
     for t in matches:
-        print(f"── {t['id']}")
+        print(f"-- {t['id']}")
         print(f"   file   : {t['filename']}")
         print(f"   tags   : {', '.join(t.get('tags', []))}")
         print(f"   summary: {t.get('summary', '')}")
