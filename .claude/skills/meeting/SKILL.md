@@ -3,6 +3,17 @@ name: meeting
 description: Generates a realistic spoken conversation for a given topic and participants, posts it through the full OTEL pipeline (gateway → transcription → diarization → indexing → storage), and creates a searchable transcript. Also searches stored transcripts by tag, keyword, or speaker name.
 when_to_use: When the user wants to simulate a meeting, generate a conversation on a topic, log it through the observability pipeline, or search/browse stored transcripts.
 argument-hint: "topic=<topic> [participants=<name1,name2,...>] | search=<query>"
+arguments:
+  topic:
+    description: The meeting topic to generate a conversation about
+    required: false
+  participants:
+    description: Comma-separated list of participant names; realistic names are invented if omitted
+    required: false
+  search:
+    description: Query string to filter stored transcripts by tag, keyword, or filename; omit to list all
+    required: false
+user-invocable: true
 allowed-tools: "Write Bash(python *)"
 ---
 
@@ -13,12 +24,12 @@ Two modes — determine which from the arguments:
 - **Generate** — `topic` is present → create a conversation and log it through the pipeline
 - **Search** — `search` is present (or the user asks to find/list/browse) → query stored transcripts
 
-Reference scripts live alongside this file:
+Reference scripts:
 
-| Script | Purpose |
-|--------|---------|
-| `post_meeting.py` | Template: fill in `PAYLOAD`, run to POST through the gateway |
-| `search_transcripts.py` | Fetch and filter stored transcripts from storage-svc |
+| Script                                              | Purpose                                                      |
+| --------------------------------------------------- | ------------------------------------------------------------ |
+| `${CLAUDE_SKILL_DIR}/scripts/post_meeting.py`       | Template: fill in `PAYLOAD`, run to POST through the gateway |
+| `${CLAUDE_SKILL_DIR}/scripts/search_transcripts.py` | Fetch and filter stored transcripts from storage-svc         |
 
 ---
 
@@ -49,7 +60,7 @@ Estimate `duration_seconds` as `total_word_count / 2.5`.
 
 ### Step 2 — POST through the pipeline
 
-Use `.claude/skills/meeting/post_meeting.py` as your template.
+Use `${CLAUDE_SKILL_DIR}/scripts/post_meeting.py` as your template.
 Copy it to `/tmp/meeting_post.py`, fill in the `PAYLOAD` dict with the
 conversation you generated, then run it:
 
@@ -75,16 +86,20 @@ appears in Grafana/Tempo even though the content is pre-baked.
 
 ## Search Mode
 
-Use `.claude/skills/meeting/search_transcripts.py` directly:
+Use `${CLAUDE_SKILL_DIR}/scripts/search_transcripts.py` directly:
 
 ```
-Bash  →  python .claude/skills/meeting/search_transcripts.py "<query>"
+Bash  →  python "${CLAUDE_SKILL_DIR}/scripts/search_transcripts.py" "<query>"
 ```
 
 Display results as a clean list. For each match show: `id`, `filename`, `tags`,
 `summary`, `created_at`.
 
-If no query is given, list all stored transcripts.
+If no query is given, list all stored transcripts:
+
+```
+Bash  →  python "${CLAUDE_SKILL_DIR}/scripts/search_transcripts.py"
+```
 
 To retrieve the full text of a specific transcript:
 
@@ -102,5 +117,5 @@ print(t["text"])
 - The gateway must be running. Check with `docker compose ps`.
 - Storage is in-memory — transcripts reset on container restart.
   Run `python scripts/seed.py` to repopulate demo data.
-- `post_meeting.py` and `search_transcripts.py` can also be run standalone
-  outside of this skill, e.g. in a terminal for quick manual testing.
+- The scripts in `scripts/` can also be run standalone outside of this skill,
+  e.g. in a terminal for quick manual testing.
