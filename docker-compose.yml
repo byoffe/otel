@@ -15,37 +15,32 @@ services:
   # App OTLP endpoint: localhost:4317 (gRPC) or localhost:4318 (HTTP)
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.100.0
-    command: ["--config=/etc/otel-collector/config.yaml"]
+    command: [ "--config=/etc/otel-collector/config.yaml" ]
     volumes:
-      - ./otel-collector/config.yaml:/etc/otel-collector/config.yaml
+      - ./infra/otel-collector/config.yaml:/etc/otel-collector/config.yaml
     ports:
       - "4317:4317"   # OTLP gRPC  — apps send traces/metrics/logs here
       - "4318:4318"   # OTLP HTTP  — alternative transport
       - "8889:8889"   # Prometheus scrape endpoint (Collector exposes metrics here)
-      - "13133:13133" # Collector health check
+      - "13133:13133" # Collector health check (queryable from host; no in-container wget)
     networks:
       - observability
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:13133/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # ── Tempo (traces) ──────────────────────────────────────────────────────────
   # Receives traces forwarded by the Collector (internal port 4317).
   # UI/API at localhost:3200
   tempo:
     image: grafana/tempo:2.4.1
-    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    command: [ "-config.file=/etc/tempo/tempo.yaml" ]
     volumes:
-      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml
+      - ./infra/tempo/tempo.yaml:/etc/tempo/tempo.yaml
       - tempo-data:/var/tempo
     ports:
       - "3200:3200"   # Tempo HTTP API + search UI
     networks:
       - observability
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3200/ready"]
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3200/ready" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -61,14 +56,14 @@ services:
       - "--web.console.libraries=/usr/share/prometheus/console_libraries"
       - "--web.console.templates=/usr/share/prometheus/consoles"
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"   # Prometheus UI + API
     networks:
       - observability
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -78,23 +73,23 @@ services:
   # API at localhost:3100
   loki:
     image: grafana/loki:3.0.0
-    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    command: [ "-config.file=/etc/loki/loki-config.yaml" ]
     volumes:
-      - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml
+      - ./infra/loki/loki-config.yaml:/etc/loki/loki-config.yaml
       - loki-data:/loki
     ports:
       - "3100:3100"   # Loki HTTP API
     networks:
       - observability
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/ready" ]
       interval: 10s
       timeout: 5s
       retries: 10
 
   # ── Grafana (visualization) ─────────────────────────────────────────────────
   # Datasources (Tempo, Prometheus, Loki) and the OTEL Overview dashboard are
-  # provisioned automatically from grafana/provisioning/ — no manual setup needed.
+  # provisioned automatically from infra/grafana/provisioning/ — no manual setup.
   # UI at localhost:3000  credentials: admin / admin
   grafana:
     image: grafana/grafana:10.4.2
@@ -105,8 +100,8 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_SECURITY_ADMIN_USER=admin
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards
       - grafana-data:/var/lib/grafana
     ports:
       - "3000:3000"   # Grafana UI
@@ -119,3 +114,121 @@ services:
         condition: service_healthy
     networks:
       - observability
+
+  # ── Pipeline services ────────────────────────────────────────────────────────
+
+  storage:
+    build:
+      context: .
+      dockerfile: services/storage/Dockerfile
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - SIM_DELAY_MIN=0.05
+      - SIM_DELAY_MAX=0.15
+    ports:
+      - "8004:8004"   # storage-svc REST API
+    networks:
+      - observability
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  transcription:
+    build:
+      context: .
+      dockerfile: services/transcription/Dockerfile
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - SIM_DELAY_MIN=0.3
+      - SIM_DELAY_MAX=0.9
+    ports:
+      - "8001:8001"   # transcription-svc REST API
+    networks:
+      - observability
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  diarization:
+    build:
+      context: .
+      dockerfile: services/diarization/Dockerfile
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - SIM_DELAY_MIN=0.2
+      - SIM_DELAY_MAX=0.6
+    ports:
+      - "8002:8002"   # diarization-svc REST API
+    networks:
+      - observability
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  indexing:
+    build:
+      context: .
+      dockerfile: services/indexing/Dockerfile
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - SIM_DELAY_MIN=0.4
+      - SIM_DELAY_MAX=1.2
+      - SIM_ERROR_RATE=0.0
+    ports:
+      - "8003:8003"   # indexing-svc REST API
+    networks:
+      - observability
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - TRANSCRIPTION_URL=http://transcription:8001
+      - DIARIZATION_URL=http://diarization:8002
+      - INDEXING_URL=http://indexing:8003
+      - STORAGE_URL=http://storage:8004
+    ports:
+      - "8000:8000"   # gateway REST API — POST /jobs here
+    networks:
+      - observability
+    depends_on:
+      otel-collector:
+        condition: service_started
+      transcription:
+        condition: service_healthy
+      diarization:
+        condition: service_healthy
+      indexing:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5

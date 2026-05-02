@@ -84,62 +84,62 @@
 
 ### Repo restructure
 
-- [ ] 1. Create `infra/` directory and move `otel-collector/`, `tempo/`, `prometheus/`,
+- ✅ 1. Create `infra/` directory and move `otel-collector/`, `tempo/`, `prometheus/`,
          `loki/`, and `grafana/` into it (git mv to preserve history)
-- [ ] 2. Update all bind-mount paths in `docker-compose.yml` from `./X/` to `./infra/X/`
+- ✅ 2. Update all bind-mount paths in `docker-compose.yml` from `./X/` to `./infra/X/`
          for the five infra services; verify `docker compose config` shows no path errors
 
 ### otel_common update
 
-- [ ] 3. Add `_TraceContextFilter` class to `otel_common/__init__.py`: a
+- ✅ 3. Add `_TraceContextFilter` class to `otel_common/__init__.py`: a
          `logging.Filter` that reads the active span context and sets `trace_id`
          (32-char hex) and `span_id` (16-char hex) on every `LogRecord`
-- [ ] 4. Add a JSON `StreamHandler` to `_setup_logs`: formats each log line as
+- ✅ 4. Add a JSON `StreamHandler` to `_setup_logs`: formats each log line as
          `{"service":"…","level":"…","msg":"…","trace_id":"…","span_id":"…"}`;
          attach the `_TraceContextFilter` to it; add to root logger alongside the
          existing `LoggingHandler` (OTLP path unchanged)
-- [ ] 5. Update `grafana/provisioning/datasources/datasources.yaml` Loki derived
+- ✅ 5. Update `grafana/provisioning/datasources/datasources.yaml` Loki derived
          field `matcherRegex` to `"trace_id":"([a-f0-9]+)"` to match the JSON log
          body format
 
 ### Service scaffolding (repeat pattern for all five services)
 
-- [ ] 6. Create `services/gateway/requirements.txt`: `fastapi`, `uvicorn[standard]`,
+- ✅ 6. Create `services/gateway/requirements.txt`: `fastapi`, `uvicorn[standard]`,
          `httpx`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc`,
          `opentelemetry-instrumentation-fastapi`, `opentelemetry-instrumentation-httpx`
-- [ ] 7. Create `services/gateway/Dockerfile`: `FROM python:3.12-slim`, build context
+- ✅ 7. Create `services/gateway/Dockerfile`: `FROM python:3.12-slim`, build context
          is repo root; `COPY otel_common/` then service files; `CMD uvicorn main:app`
-- [ ] 8. Repeat tasks 6–7 for transcription, diarization, indexing, storage
+- ✅ 8. Repeat tasks 6–7 for transcription, diarization, indexing, storage
          (identical requirements except port; indexing adds no extra deps)
 
 ### Service implementations
 
-- [ ] 9. Create `services/storage/main.py`: FastAPI app with in-memory `dict` store;
+- ✅ 9. Create `services/storage/main.py`: FastAPI app with in-memory `dict` store;
          routes: `POST /transcripts`, `GET /transcripts`, `GET /transcripts/{id}`,
          `GET /health`; increments counter `storage.transcripts_stored_total` on store;
          calls `init_otel("storage-svc")` and `FastAPIInstrumentor.instrument_app(app)`
          at startup
-- [ ] 10. Create `services/transcription/main.py`: `POST /transcribe` simulates ASR
+- ✅ 10. Create `services/transcription/main.py`: `POST /transcribe` simulates ASR
           via `asyncio.sleep(uniform(SIM_DELAY_MIN, SIM_DELAY_MAX))`; generates fake
           text and word count; sets span attribute `transcript.word_count`; records
           histogram `transcription.duration_seconds`; logs one structured record
-- [ ] 11. Create `services/diarization/main.py`: `POST /diarize` simulates speaker
+- ✅ 11. Create `services/diarization/main.py`: `POST /diarize` simulates speaker
           attribution; generates 2–4 fake speakers with segment counts; sets span
           attribute `diarization.speaker_count`; increments counter
           `diarization.segments_total` by segment count; logs one structured record
-- [ ] 12. Create `services/indexing/main.py`: `POST /index` simulates LLM call;
+- ✅ 12. Create `services/indexing/main.py`: `POST /index` simulates LLM call;
           if `random() < SIM_ERROR_RATE` raises HTTP 503 (span status=ERROR);
           otherwise generates fake tags and summary; sets span attributes
           `indexing.model` and `indexing.tokens_used`; records histogram
           `indexing.llm_tokens_used`; logs one structured record
-- [ ] 13. Create `services/gateway/main.py`: `POST /jobs` orchestrates the pipeline
+- ✅ 13. Create `services/gateway/main.py`: `POST /jobs` orchestrates the pipeline
           sequentially using `httpx.AsyncClient`; calls transcription → diarization
           → indexing → storage in order; propagates errors from downstream as HTTP
           502; logs one structured record per job with final transcript_id
 
 ### Docker Compose wiring
 
-- [ ] 14. Add five app services to `docker-compose.yml` with:
+- ✅ 14. Add five app services to `docker-compose.yml` with:
           - `build: { context: ., dockerfile: services/<name>/Dockerfile }`
           - `OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317`
           - `SIM_DELAY_MIN`, `SIM_DELAY_MAX` env vars with defaults
@@ -151,15 +151,15 @@
 
 ### Verification
 
-- [ ] 15. Run `docker compose up --build -d`, wait for all services healthy,
+- ✅ 15. Run `docker compose up --build -d`, wait for all services healthy,
           then `curl -s -X POST http://localhost:8000/jobs \
           -H 'Content-Type: application/json' \
           -d '{"filename":"test.wav","duration_seconds":3600}' | python -m json.tool`
           — confirm a `transcript_id` is returned
-- [ ] 16. In Grafana → Explore → Tempo, run TraceQL `{}` — confirm a trace with
+- ✅ 16. In Grafana → Explore → Tempo, run TraceQL `{}` — confirm a trace with
           spans from all five services (`gateway-svc`, `transcription-svc`,
           `diarization-svc`, `indexing-svc`, `storage-svc`) appears
-- [ ] 17. In Grafana → Explore → Loki, run `{job="gateway-svc"}` — confirm a log
+- ✅ 17. In Grafana → Explore → Loki, run `{job="gateway-svc"}` — confirm a log
           line with `trace_id` field appears; click "View Trace in Tempo" link
 
 ## Notes

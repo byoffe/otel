@@ -90,23 +90,23 @@ enters the code and where it surfaces in the UI.
 
 ### Story 2 — Pipeline Services (gateway → transcription → diarization → indexing → storage)
 
-- [ ] Each service starts as a FastAPI app with health check at `GET /health`.
-- [ ] Given all services are running, when a `POST /jobs` is submitted to gateway-svc
+- ✅ Each service starts as a FastAPI app with health check at `GET /health`.
+- ✅ Given all services are running, when a `POST /jobs` is submitted to gateway-svc
   with a fake audio filename, then an end-to-end trace spanning all five services
   appears in Tempo.
-- [ ] Each service-to-service call propagates W3C TraceContext headers so all spans
+- ✅ Each service-to-service call propagates W3C TraceContext headers so all spans
   share one trace ID.
-- [ ] `transcription-svc` emits a span attribute `transcript.word_count` and a
+- ✅ `transcription-svc` emits a span attribute `transcript.word_count` and a
   histogram metric `transcription.duration_seconds`.
-- [ ] `diarization-svc` emits a span attribute `diarization.speaker_count` and a
+- ✅ `diarization-svc` emits a span attribute `diarization.speaker_count` and a
   counter metric `diarization.segments_total`.
-- [ ] `indexing-svc` emits a span attribute `indexing.model` and a histogram metric
+- ✅ `indexing-svc` emits a span attribute `indexing.model` and a histogram metric
   `indexing.llm_tokens_used`.
-- [ ] `storage-svc` emits a counter metric `storage.transcripts_stored_total`.
-- [ ] Each service logs at least one structured log record per request (with trace_id
+- ✅ `storage-svc` emits a counter metric `storage.transcripts_stored_total`.
+- ✅ Each service logs at least one structured log record per request (with trace_id
   and span_id in the log body so Grafana can correlate logs↔traces).
-- [ ] Simulated delays and error rates are configurable via environment variables.
-- [ ] All services and their dependencies are declared in `docker-compose.yml`.
+- ✅ Simulated delays and error rates are configurable via environment variables.
+- ✅ All services and their dependencies are declared in `docker-compose.yml`.
 
 ### Story 3 — MCP Server + Claude Integration
 
