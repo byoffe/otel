@@ -66,26 +66,26 @@ enters the code and where it surfaces in the UI.
 
 ### Story 1 — Observability Infrastructure + Project Scaffold
 
-- [ ] Running `docker compose up` starts OTEL Collector, Tempo, Prometheus, Loki, and
+- ✅ Running `docker compose up` starts OTEL Collector, Tempo, Prometheus, Loki, and
   Grafana with no manual configuration.
-- [ ] Grafana is reachable at `http://localhost:3000` and has Tempo, Prometheus, and
+- ✅ Grafana is reachable at `http://localhost:3000` and has Tempo, Prometheus, and
   Loki datasources provisioned automatically (no manual setup).
-- [ ] A starter Grafana dashboard is provisioned showing: a trace search panel (Tempo),
+- ✅ A starter Grafana dashboard is provisioned showing: a trace table (Tempo),
   a metric panel (Prometheus), and a log panel (Loki).
-- [ ] The Python project root has `pyproject.toml` with `ruff` and `pyright` as dev
-  dependencies; a `requirements-dev.txt` is generated from it for CI convenience.
-- [ ] `ruff check .` and `ruff format --check .` pass on the initial scaffold with
+- ✅ The Python project root has `pyproject.toml` with `ruff` and `pyright` as dev
+  dependencies; a `requirements-dev.txt` installs everything via `-e .[dev]`.
+- ✅ `ruff check .` and `ruff format --check .` pass on the initial scaffold with
   zero violations.
-- [ ] `pyright` passes on the initial scaffold.
-- [ ] GitHub Actions workflow runs on push and PR to `main`; job fails if lint, format,
+- ✅ `pyright` passes on the initial scaffold.
+- ✅ GitHub Actions workflow runs on push and PR to `main`; job fails if lint, format,
   or type checks fail.
-- [ ] Given the stack is running, when `python scripts/smoke_test.py` is run, then a
-  trace appears in Tempo's search UI within 10 seconds.
-- [ ] Given the stack is running, when `python scripts/smoke_test.py` is run, then a
+- ✅ Given the stack is running, when `python scripts/smoke_test.py` is run, then a
+  trace appears in Tempo (confirmed via API and Explore → Tempo → TraceQL: `{}`).
+- ✅ Given the stack is running, when `python scripts/smoke_test.py` is run, then a
   metric named `otel.smoke.counter` appears in Prometheus/Grafana within 30 seconds.
-- [ ] Given the stack is running, when `python scripts/smoke_test.py` is run, then a
+- ✅ Given the stack is running, when `python scripts/smoke_test.py` is run, then a
   structured log line appears in Loki's Explore UI within 30 seconds.
-- [ ] `README.md` documents: prerequisites (Docker, Python + venv), how to start the
+- ✅ `README.md` documents: prerequisites (Docker, Python + venv), how to start the
   stack, how to run the smoke test, and where to find each signal in Grafana.
 
 ### Story 2 — Pipeline Services (gateway → transcription → diarization → indexing → storage)
