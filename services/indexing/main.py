@@ -63,6 +63,8 @@ class IndexRequest(BaseModel):
     transcript_id: str
     text: str
     speakers: list[dict[str, Any]]
+    baked_tags: list[str] | None = None
+    baked_summary: str | None = None
 
 
 class IndexResponse(BaseModel):
@@ -82,18 +84,23 @@ async def health() -> dict[str, str]:
 async def index(body: IndexRequest) -> IndexResponse:
     await asyncio.sleep(random.uniform(_DELAY_MIN, _DELAY_MAX))
 
-    if random.random() < _ERROR_RATE:
-        span = trace.get_current_span()
-        span.set_status(trace.StatusCode.ERROR, "simulated LLM timeout")
-        logger.error(
-            "LLM call failed (simulated)",
-            extra={"transcript_id": body.transcript_id},
-        )
-        raise HTTPException(status_code=503, detail="LLM service unavailable (simulated)")
+    if body.baked_tags is not None and body.baked_summary is not None:
+        tags = body.baked_tags
+        summary = body.baked_summary
+        tokens_used = len(body.text.split()) * 2  # rough estimate: ~2 tokens per word
+    else:
+        if random.random() < _ERROR_RATE:
+            span = trace.get_current_span()
+            span.set_status(trace.StatusCode.ERROR, "simulated LLM timeout")
+            logger.error(
+                "LLM call failed (simulated)",
+                extra={"transcript_id": body.transcript_id},
+            )
+            raise HTTPException(status_code=503, detail="LLM service unavailable (simulated)")
 
-    tokens_used = random.randint(800, 4000)
-    tags = random.sample(_TAG_POOL, random.randint(2, 5))
-    summary = random.choice(_SUMMARIES)
+        tokens_used = random.randint(800, 4000)
+        tags = random.sample(_TAG_POOL, random.randint(2, 5))
+        summary = random.choice(_SUMMARIES)
 
     _token_histogram.record(tokens_used)
     span = trace.get_current_span()

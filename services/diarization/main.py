@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import random
+from typing import Any
 
 from fastapi import FastAPI
 from opentelemetry import metrics, trace
@@ -36,6 +37,7 @@ _SPEAKER_NAMES = ["Alice", "Bob", "Carol", "David", "Eve"]
 class DiarizeRequest(BaseModel):
     transcript_id: str
     text: str
+    baked_speakers: list[dict[str, Any]] | None = None
 
 
 class Speaker(BaseModel):
@@ -58,15 +60,29 @@ async def health() -> dict[str, str]:
 async def diarize(body: DiarizeRequest) -> DiarizeResponse:
     await asyncio.sleep(random.uniform(_DELAY_MIN, _DELAY_MAX))
 
-    speaker_count = random.randint(2, min(4, len(_SPEAKER_NAMES)))
-    names = random.sample(_SPEAKER_NAMES, speaker_count)
-    total_words = max(len(body.text.split()), 1)
-    shares = [random.random() for _ in names]
-    total = sum(shares)
-    speakers = [
-        Speaker(name=n, word_count=int(total_words * s / total)) for n, s in zip(names, shares)
-    ]
-    segment_count = random.randint(speaker_count * 3, speaker_count * 8)
+    if body.baked_speakers is not None:
+        speakers = [Speaker(**s) for s in body.baked_speakers]
+        speaker_count = len(speakers)
+        # count actual speaker turns: lines that start with "Name:"
+        speaker_names = {s["name"] for s in body.baked_speakers}
+        segment_count = (
+            sum(
+                1
+                for line in body.text.splitlines()
+                if any(line.startswith(name + ":") for name in speaker_names)
+            )
+            or speaker_count * 5
+        )
+    else:
+        speaker_count = random.randint(2, min(4, len(_SPEAKER_NAMES)))
+        names = random.sample(_SPEAKER_NAMES, speaker_count)
+        total_words = max(len(body.text.split()), 1)
+        shares = [random.random() for _ in names]
+        total = sum(shares)
+        speakers = [
+            Speaker(name=n, word_count=int(total_words * s / total)) for n, s in zip(names, shares)
+        ]
+        segment_count = random.randint(speaker_count * 3, speaker_count * 8)
 
     _segments_counter.add(segment_count)
     trace.get_current_span().set_attribute("diarization.speaker_count", speaker_count)

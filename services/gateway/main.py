@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -31,9 +32,20 @@ _INDEXING_URL = os.environ.get("INDEXING_URL", "http://localhost:8003")
 _STORAGE_URL = os.environ.get("STORAGE_URL", "http://localhost:8004")
 
 
+class ConversationContent(BaseModel):
+    """Pre-baked content for the /meeting skill.  When present, each downstream
+    service uses these values instead of running its simulation."""
+
+    text: str
+    speakers: list[dict[str, Any]]
+    tags: list[str]
+    summary: str
+
+
 class JobRequest(BaseModel):
     filename: str
     duration_seconds: float = 3600.0
+    content: ConversationContent | None = None
 
 
 class JobResponse(BaseModel):
@@ -52,34 +64,43 @@ async def create_job(body: JobRequest) -> JobResponse:
     job_id = str(uuid.uuid4())
     logger.info("job started", extra={"job_id": job_id, "audio_file": body.filename})
 
+    baked = body.content
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         # 1 — transcribe
-        r = await client.post(
-            f"{_TRANSCRIPTION_URL}/transcribe",
-            json={"filename": body.filename, "duration_seconds": body.duration_seconds},
-        )
+        transcribe_payload: dict[str, Any] = {
+            "filename": body.filename,
+            "duration_seconds": body.duration_seconds,
+        }
+        if baked:
+            transcribe_payload["baked_text"] = baked.text
+        r = await client.post(f"{_TRANSCRIPTION_URL}/transcribe", json=transcribe_payload)
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail=f"transcription failed: {r.text}")
         transcription = r.json()
 
         # 2 — diarize
-        r = await client.post(
-            f"{_DIARIZATION_URL}/diarize",
-            json={"transcript_id": transcription["transcript_id"], "text": transcription["text"]},
-        )
+        diarize_payload: dict[str, Any] = {
+            "transcript_id": transcription["transcript_id"],
+            "text": transcription["text"],
+        }
+        if baked:
+            diarize_payload["baked_speakers"] = baked.speakers
+        r = await client.post(f"{_DIARIZATION_URL}/diarize", json=diarize_payload)
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail=f"diarization failed: {r.text}")
         diarization = r.json()
 
         # 3 — index
-        r = await client.post(
-            f"{_INDEXING_URL}/index",
-            json={
-                "transcript_id": transcription["transcript_id"],
-                "text": transcription["text"],
-                "speakers": diarization["speakers"],
-            },
-        )
+        index_payload: dict[str, Any] = {
+            "transcript_id": transcription["transcript_id"],
+            "text": transcription["text"],
+            "speakers": diarization["speakers"],
+        }
+        if baked:
+            index_payload["baked_tags"] = baked.tags
+            index_payload["baked_summary"] = baked.summary
+        r = await client.post(f"{_INDEXING_URL}/index", json=index_payload)
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail=f"indexing failed: {r.text}")
         indexing = r.json()

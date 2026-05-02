@@ -60,6 +60,7 @@ _FILLER_WORDS = [
 class TranscribeRequest(BaseModel):
     filename: str
     duration_seconds: float
+    baked_text: str | None = None
 
 
 class TranscribeResponse(BaseModel):
@@ -78,8 +79,12 @@ async def transcribe(body: TranscribeRequest) -> TranscribeResponse:
     t0 = time.perf_counter()
     await asyncio.sleep(random.uniform(_DELAY_MIN, _DELAY_MAX))
 
-    word_count = int(body.duration_seconds * random.uniform(110, 150))
-    text = " ".join(random.choices(_FILLER_WORDS, k=min(word_count, 300)))
+    if body.baked_text is not None:
+        text = body.baked_text
+        word_count = len(text.split())
+    else:
+        word_count = int(body.duration_seconds * random.uniform(110, 150))
+        text = " ".join(random.choices(_FILLER_WORDS, k=min(word_count, 300)))
     transcript_id = str(uuid.uuid4())
     duration = time.perf_counter() - t0
 

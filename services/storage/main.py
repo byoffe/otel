@@ -49,6 +49,7 @@ class TranscriptSummary(BaseModel):
     id: str
     filename: str
     tags: list[str]
+    summary: str
     created_at: str
 
 
@@ -83,6 +84,7 @@ async def list_transcripts() -> list[TranscriptSummary]:
             id=v["id"],
             filename=v["filename"],
             tags=v["tags"],
+            summary=v["summary"],
             created_at=v["created_at"],
         )
         for v in _store.values()
