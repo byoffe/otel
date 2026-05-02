@@ -10,10 +10,11 @@
       "datasource": { "type": "tempo", "uid": "tempo" },
       "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
       "id": 1,
+      "fieldConfig": { "defaults": {}, "overrides": [] },
       "options": {
-        "dedupStrategy": "none",
-        "enableLogsSample": false,
-        "frameType": "TraceListFrameType"
+        "footer": { "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Start time" }]
       },
       "targets": [
         {
@@ -25,8 +26,8 @@
           "tableType": "traces"
         }
       ],
-      "title": "Recent Traces",
-      "type": "traces"
+      "title": "Recent Traces (also try Explore → Tempo → TraceQL: {})",
+      "type": "table"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -96,6 +97,6 @@
   "timezone": "browser",
   "title": "OTEL Overview",
   "uid": "otel-overview",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
