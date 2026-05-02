@@ -123,6 +123,7 @@ services:
       dockerfile: services/storage/Dockerfile
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_PYTHON_EXCLUDED_URLS=health
       - SIM_DELAY_MIN=0.05
       - SIM_DELAY_MAX=0.15
     ports:
@@ -144,6 +145,7 @@ services:
       dockerfile: services/transcription/Dockerfile
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_PYTHON_EXCLUDED_URLS=health
       - SIM_DELAY_MIN=0.3
       - SIM_DELAY_MAX=0.9
     ports:
@@ -165,6 +167,7 @@ services:
       dockerfile: services/diarization/Dockerfile
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_PYTHON_EXCLUDED_URLS=health
       - SIM_DELAY_MIN=0.2
       - SIM_DELAY_MAX=0.6
     ports:
@@ -186,6 +189,7 @@ services:
       dockerfile: services/indexing/Dockerfile
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_PYTHON_EXCLUDED_URLS=health
       - SIM_DELAY_MIN=0.4
       - SIM_DELAY_MAX=1.2
       - SIM_ERROR_RATE=0.0
@@ -208,6 +212,7 @@ services:
       dockerfile: services/gateway/Dockerfile
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_PYTHON_EXCLUDED_URLS=health
       - TRANSCRIPTION_URL=http://transcription:8001
       - DIARIZATION_URL=http://diarization:8002
       - INDEXING_URL=http://indexing:8003

@@ -20,13 +20,13 @@
         {
           "datasource": { "type": "tempo", "uid": "tempo" },
           "limit": 20,
-          "query": "{}",
+          "query": "{name !~ \".*health.*\"}",
           "queryType": "traceql",
           "refId": "A",
           "tableType": "traces"
         }
       ],
-      "title": "Recent Traces (also try Explore → Tempo → TraceQL: {})",
+      "title": "Recent Pipeline Traces (Explore → Tempo for full trace view)",
       "type": "table"
     },
     {
@@ -80,12 +80,12 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "loki" },
-          "expr": "{job=\"otel-smoke\"}",
+          "expr": "{job=~\".+-svc\"}",
           "queryType": "range",
           "refId": "A"
         }
       ],
-      "title": "Recent Logs",
+      "title": "Recent Pipeline Logs",
       "type": "logs"
     }
   ],
@@ -97,6 +97,6 @@
   "timezone": "browser",
   "title": "OTEL Overview",
   "uid": "otel-overview",
-  "version": 2,
+  "version": 4,
   "weekStart": ""
 }

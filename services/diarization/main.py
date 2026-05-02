@@ -18,7 +18,7 @@ SERVICE_NAME = "diarization-svc"
 init_otel(SERVICE_NAME)
 
 app = FastAPI(title=SERVICE_NAME)
-FastAPIInstrumentor.instrument_app(app)
+FastAPIInstrumentor.instrument_app(app, excluded_urls="health")
 
 logger = logging.getLogger(SERVICE_NAME)
 meter = metrics.get_meter(SERVICE_NAME)

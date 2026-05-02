@@ -21,7 +21,7 @@ init_otel(SERVICE_NAME)
 HTTPXClientInstrumentor().instrument()
 
 app = FastAPI(title=SERVICE_NAME)
-FastAPIInstrumentor.instrument_app(app)
+FastAPIInstrumentor.instrument_app(app, excluded_urls="health")
 
 logger = logging.getLogger(SERVICE_NAME)
 
