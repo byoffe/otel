@@ -13,7 +13,7 @@ import os
 
 from opentelemetry import metrics, trace
 
-from mcp_server import mcp
+from . import mcp
 
 
 def _flush_providers() -> None:

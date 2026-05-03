@@ -27,3 +27,6 @@ jobs:
 
       - name: Type check (pyright)
         run: pyright
+
+      - name: Test (pytest)
+        run: pytest

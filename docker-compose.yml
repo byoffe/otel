@@ -211,7 +211,7 @@ services:
   pipeline-analyst:
     build:
       context: .
-      dockerfile: mcp_server/Dockerfile
+      dockerfile: services/mcp_server/Dockerfile
     environment:
       - MCP_TRANSPORT=sse
       - MCP_PORT=8005

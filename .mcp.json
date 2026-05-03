@@ -2,7 +2,7 @@
   "mcpServers": {
     "pipeline-analyst": {
       "command": "python",
-      "args": ["-m", "mcp_server"],
+      "args": ["-m", "services.mcp_server"],
       "env": {
         "TEMPO_URL": "http://localhost:3200",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317"
