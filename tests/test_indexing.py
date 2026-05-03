@@ -1,7 +1,7 @@
 """Tests for the indexing service — span attributes, metric emission, error status."""
 
-from helpers import emitted_metric_names, find_span
 from fastapi.testclient import TestClient
+from helpers import emitted_metric_names, find_span
 from opentelemetry.trace import StatusCode
 
 from services.indexing import main as indexing_module

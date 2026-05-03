@@ -1,8 +1,8 @@
 """Tests for the storage service — span attributes and metric emission."""
 
 import pytest
-from helpers import emitted_metric_names, find_span
 from fastapi.testclient import TestClient
+from helpers import emitted_metric_names, find_span
 
 from services.storage.main import _store, app
 

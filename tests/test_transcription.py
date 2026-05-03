@@ -1,7 +1,7 @@
 """Tests for the transcription service — span attributes and metric emission."""
 
-from helpers import emitted_metric_names, find_span
 from fastapi.testclient import TestClient
+from helpers import emitted_metric_names, find_span
 
 from services.transcription.main import app
 
