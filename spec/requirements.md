@@ -134,6 +134,25 @@ enters the code and where it surfaces in the UI.
 - [ ] A `Makefile` (or `justfile`) provides: `make up`, `make dev`, `make smoke`,
   `make seed`, `make logs`.
 
+### Story 5 — Richer Metrics, Collector-Derived Signals, and Production Dashboards
+
+- Every OTEL metric instrument type is represented in production code: Counter,
+  Histogram, UpDownCounter, and ObservableGauge.
+- The OTEL Collector derives RED metrics (Rate, Errors, Duration) from trace data
+  using the `spanmetrics` connector — no application code changes required.
+- The gateway root span serves as the end-to-end pipeline duration signal; this
+  appears automatically in `spanmetrics` output without extra instrumentation.
+- Histogram observations carry exemplars (current trace ID) so a metric spike in
+  Grafana can be clicked to navigate directly to the offending trace in Tempo.
+- Three new Grafana dashboards are provisioned automatically:
+  1. **Pipeline RED** — request rate, error rate, p50/p95/p99 latency per service,
+     all derived from `spanmetrics` (no application metrics required).
+  2. **Data Insights** — word count heatmap, LLM token distribution, speaker count
+     distribution, transcript accumulation gauge.
+  3. **Pipeline Latency** — end-to-end duration percentiles, per-stage breakdown,
+     SLO panel showing % of jobs completing under a configurable threshold.
+- Existing unit tests are updated to cover new metric instruments.
+
 ## Out of Scope
 
 - Real audio processing (whisper, pyannote, actual LLMs) — all pipeline logic is
@@ -143,4 +162,3 @@ enters the code and where it surfaces in the UI.
 - Production deployment, Kubernetes, or cloud infra.
 - Persistent storage beyond in-memory or SQLite (no Postgres, no S3).
 - OTEL sampling configuration (always-on sampling is fine for a demo).
-- OpenTelemetry metrics exemplars (nice to have, out of scope for now).

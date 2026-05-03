@@ -549,3 +549,168 @@ filled-in script to `/tmp/` before running it.
 | `.claude/skills/meeting/SKILL.md` | Skill entrypoint: frontmatter + Generate/Search mode instructions |
 | `.claude/skills/meeting/scripts/post_meeting.py` | Template POST script |
 | `.claude/skills/meeting/scripts/search_transcripts.py` | Transcript search script (ASCII separator for Windows compat) |
+
+---
+
+## Commit 4 — Richer Metrics, Collector-Derived Signals, and Production Dashboards
+
+### Scope
+
+- All four OTEL metric instrument types present in production code
+- Collector-side `spanmetrics` connector deriving RED metrics from traces
+- Prometheus exemplar storage enabled so metric data points link back to traces
+- Three new Grafana dashboards replacing the starter panel with production-quality views
+
+### New Metric Instruments
+
+Every service gets at least one new instrument. The goal is a representative example
+of every SDK type, not metric maximalism.
+
+| Service | Instrument | Name | Type | Notes |
+|---|---|---|---|---|
+| gateway | UpDownCounter | `pipeline.jobs_in_flight` | UpDownCounter | +1 on request enter, -1 on exit (success or error) |
+| gateway | Counter | `gateway.jobs_total` | Counter | Attributes: `status=success\|error` |
+| transcription | Histogram | `transcription.word_count` | Histogram | Distribution of transcript lengths; teaches multiple histograms per service |
+| diarization | Histogram | `diarization.processing_duration_seconds` | Histogram | Wall-clock time for diarization step; complements the existing counter |
+| indexing | Counter | `indexing.errors_total` | Counter | Incremented on simulated failure; explicit error signal beyond span status |
+| storage | ObservableGauge | `storage.transcripts_active` | ObservableGauge | Reports `len(_store)` via callback; teaches pull-style (observable) instruments |
+
+`ObservableGauge` is the only pull-style instrument in the SDK — a callback is
+registered once and the SDK calls it at each collection interval. Contrasted with
+`Counter` and `Histogram` which are push-style (application calls `.add()` / `.record()`).
+`UpDownCounter` completes the set: like Counter but can go negative (in-flight requests).
+
+### Collector `spanmetrics` Connector
+
+`spanmetrics` is a built-in OTEL Collector connector that reads the traces pipeline
+and emits metrics. It requires zero application code changes — it derives metrics
+from spans that already exist.
+
+```
+traces pipeline
+  receivers: [otlp]
+  exporters: [otlp/tempo, spanmetrics]   ← spanmetrics as trace consumer
+
+metrics pipeline
+  receivers: [otlp, spanmetrics]          ← spanmetrics as metric producer
+  exporters: [prometheus]
+```
+
+What it emits (namespace `pipeline`):
+- `pipeline_calls_total` — counter per span, labeled by `service_name`, `span_name`,
+  `http_status_code`, `status_code` (OTEL status: OK / ERROR / UNSET)
+- `pipeline_duration_bucket` — histogram of span durations, same labels
+
+The gateway root span (`POST /jobs`, `service_name=gateway-svc`) has a duration equal
+to the full end-to-end pipeline time. No new instrumentation required.
+
+Configuration (in `infra/otel-collector/config.yaml`):
+```yaml
+connectors:
+  spanmetrics:
+    namespace: pipeline
+    histogram:
+      explicit:
+        buckets: [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+    dimensions:
+      - name: service.name
+      - name: http.route
+      - name: http.status_code
+    metrics_flush_interval: 15s
+```
+
+### Exemplars
+
+An exemplar is a specific trace ID attached to a histogram observation. When Grafana
+renders a histogram panel with exemplars enabled, each data point shows a diamond
+marker; clicking it opens the trace in Tempo. This creates a direct path from
+"metric spike" → "offending trace".
+
+Three components required:
+1. **SDK**: `MeterProvider` configured with `AlwaysOnExemplarFilter` — the SDK then
+   samples the current trace context and attaches it to histogram recordings.
+2. **Prometheus**: `--enable-feature=exemplar-storage` flag in docker-compose command.
+3. **Grafana panel**: `exemplarColor` set in panel definition.
+
+`spanmetrics`-generated histograms carry exemplars automatically (they read span
+context from the trace). Application histograms (`transcription.duration_seconds` etc.)
+carry exemplars once the `AlwaysOnExemplarFilter` is set.
+
+### Dashboard Design
+
+Three dashboards replace the single `otel-overview.json` starter.
+
+#### 1. Pipeline RED (`pipeline-red.json`)
+Prometheus datasource. All queries from `spanmetrics` output — no application metrics.
+
+| Panel | Type | Query |
+|---|---|---|
+| Request rate (req/s) | Time series | `rate(pipeline_calls_total{service_name=~".+"}[1m])` per service |
+| Error rate (%) | Time series | `rate(pipeline_calls_total{status_code="STATUS_CODE_ERROR"}[1m]) / rate(pipeline_calls_total[1m])` |
+| p50 / p95 / p99 latency | Time series | `histogram_quantile(0.95, rate(pipeline_duration_bucket[5m]))` |
+| Requests today | Stat | `increase(pipeline_calls_total{http_route="/jobs"}[24h])` |
+| Error count today | Stat | `increase(pipeline_calls_total{status_code="STATUS_CODE_ERROR"}[24h])` |
+
+#### 2. Data Insights (`data-insights.json`)
+Mix of Prometheus datasource (application metrics) and Loki (log counts).
+
+| Panel | Type | Query |
+|---|---|---|
+| Word count distribution | Heatmap | `transcription_word_count_bucket` |
+| Token usage over time | Time series | `rate(indexing_llm_tokens_used_sum[5m])` |
+| Speaker count (bar) | Bar chart | `sum by (le) (indexing_llm_tokens_used_bucket)` |
+| Transcripts stored | Gauge + trend | `storage_transcripts_active` (observable gauge, live) |
+| Transcripts stored over time | Time series | `increase(storage_transcripts_stored_total[1h])` |
+| Jobs in flight | Gauge | `pipeline_jobs_in_flight` |
+
+#### 3. Pipeline Latency (`pipeline-latency.json`)
+End-to-end and per-stage latency. SLO panel.
+
+| Panel | Type | Query |
+|---|---|---|
+| End-to-end p50/p95/p99 | Time series | `histogram_quantile` on `pipeline_duration_bucket{service_name="gateway-svc"}` |
+| Duration heatmap | Heatmap | `pipeline_duration_bucket{service_name="gateway-svc"}` |
+| Per-stage median | Bar gauge | `histogram_quantile(0.5, ...)` per service |
+| SLO: % under 5s | Stat | `(1 - rate(pipeline_duration_bucket{le="5"}[1h]) / rate(pipeline_duration_count[1h])) * 100` |
+| Latency budget | Table | p50/p95/p99 per service side by side |
+
+### Key Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Derived metrics source | `spanmetrics` connector | Zero application code change; teaches that the collector is a processing layer, not just a router |
+| End-to-end duration signal | Gateway root span via `spanmetrics` | The gateway span already covers the full wall-clock time; no new "job timer" needed |
+| Observable gauge in storage | `len(_store)` callback | Simplest meaningful gauge; contrasts pull-style with push-style instruments |
+| Exemplar filter | `AlwaysOnExemplarFilter` | Always-on is correct for a demo; production would use `TraceBasedExemplarFilter` |
+| Dashboard count | 3 focused dashboards | Each has one job (RED / data characteristics / latency); avoids "everything on one page" anti-pattern |
+| Existing otel-overview.json | Retain with updates | Still useful as a "three signals" entry point; update to link to the new dashboards |
+
+### File and Component Changes
+
+| File | Change |
+|---|---|
+| `infra/otel-collector/config.yaml` | Add `spanmetrics` connector; wire into traces + metrics pipelines |
+| `docker-compose.yml` | Add `--enable-feature=exemplar-storage` to Prometheus command |
+| `otel_common/__init__.py` | Add `AlwaysOnExemplarFilter` to `MeterProvider` construction |
+| `services/gateway/main.py` | Add `pipeline.jobs_in_flight` UpDownCounter; `gateway.jobs_total` Counter |
+| `services/transcription/main.py` | Add `transcription.word_count` histogram |
+| `services/diarization/main.py` | Add `diarization.processing_duration_seconds` histogram |
+| `services/indexing/main.py` | Add `indexing.errors_total` Counter |
+| `services/storage/main.py` | Add `storage.transcripts_active` ObservableGauge |
+| `infra/grafana/dashboards/pipeline-red.json` | New: RED metrics dashboard |
+| `infra/grafana/dashboards/data-insights.json` | New: data characteristics dashboard |
+| `infra/grafana/dashboards/pipeline-latency.json` | New: latency + SLO dashboard |
+| `infra/grafana/dashboards/otel-overview.json` | Update: add links to new dashboards |
+| `tests/test_*.py` | Add tests for each new metric instrument |
+
+### Edge Cases and Failure Modes
+
+- **`spanmetrics` first-flush delay**: metrics don't appear in Prometheus until
+  `metrics_flush_interval` (15s) after the first trace. Dashboard queries use
+  `[5m]` rate windows; first result appears ~15–20s after first pipeline job.
+- **No exemplars in OTEL SDK < 1.24**: `AlwaysOnExemplarFilter` was stabilised in
+  1.24. `pyproject.toml` already pins `opentelemetry-sdk>=1.24` so this is safe.
+- **Exemplar cardinality in Prometheus**: exemplars are stored per-bucket in TSDB
+  with a fixed ring buffer (default 10 per series). For a demo, this is fine.
+- **Grafana heatmap panel**: requires `format=heatmap` and bucket label matching;
+  `spanmetrics` uses `le` labels compatible with Grafana's native histogram support.

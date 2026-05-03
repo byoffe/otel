@@ -339,3 +339,116 @@
   `tests/` is not on `sys.path`; the `pythonpath` setting in pytest config resolves this.
 - Metric value assertions use `>=` intentionally — metric values derive from fake
   simulation data and should not be pinned to internal formula results.
+
+---
+
+## Commit 4 — Richer Metrics, Collector-Derived Signals, and Production Dashboards
+
+### New metric instruments in services
+
+- [ ] 1. Add `pipeline.jobs_in_flight` UpDownCounter to `services/gateway/main.py`:
+         `+1` at request entry (before first downstream call), `-1` in a `finally`
+         block so errors still decrement. No attributes needed.
+- [ ] 2. Add `gateway.jobs_total` Counter to `services/gateway/main.py` with attribute
+         `status`: record `status="success"` on 200, `status="error"` on 502.
+- [ ] 3. Add `transcription.word_count` Histogram to `services/transcription/main.py`:
+         record `word_count` of the generated/baked text on each request.
+- [ ] 4. Add `diarization.processing_duration_seconds` Histogram to
+         `services/diarization/main.py`: record wall-clock time of the diarization
+         step (use `time.perf_counter()` around the simulation block).
+- [ ] 5. Add `indexing.errors_total` Counter to `services/indexing/main.py`: increment
+         when `random() < _ERROR_RATE` fires (before raising 503).
+- [ ] 6. Add `storage.transcripts_active` ObservableGauge to `services/storage/main.py`:
+         register a callback `lambda: len(_store)` with `meter.create_observable_gauge`.
+         This is a pull-style instrument — no per-request call needed.
+
+### Exemplars
+
+- [ ] 7. Add `AlwaysOnExemplarFilter` import and pass it to `MeterProvider` in
+         `otel_common/__init__.py`:
+         ```python
+         from opentelemetry.sdk.metrics._internal.exemplar import AlwaysOnExemplarFilter
+         MeterProvider(metric_readers=[...], exemplar_filter=AlwaysOnExemplarFilter())
+         ```
+- [ ] 8. Add `--enable-feature=exemplar-storage` to the Prometheus service command in
+         `docker-compose.yml` so Prometheus stores and exposes exemplar data.
+
+### OTEL Collector `spanmetrics` connector
+
+- [ ] 9. Add `connectors:` section to `infra/otel-collector/config.yaml` with
+         `spanmetrics` connector:
+         ```yaml
+         connectors:
+           spanmetrics:
+             namespace: pipeline
+             histogram:
+               explicit:
+                 buckets: [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+             dimensions:
+               - name: service.name
+               - name: http.route
+               - name: http.status_code
+             metrics_flush_interval: 15s
+         ```
+- [ ] 10. Wire `spanmetrics` into both pipelines in `service.pipelines`:
+          - traces pipeline: add `spanmetrics` to `exporters` list
+          - metrics pipeline: add `spanmetrics` to `receivers` list
+- [ ] 11. Verify (after `docker compose up`) that `pipeline_calls_total` and
+          `pipeline_duration_bucket` appear in Prometheus at
+          `http://localhost:9090/api/v1/label/__name__/values`
+
+### Grafana dashboards
+
+- [ ] 12. Create `infra/grafana/dashboards/pipeline-red.json`: 5 panels using
+          `spanmetrics` output from Prometheus datasource:
+          - Request rate time series: `rate(pipeline_calls_total[1m])` split by `service_name`
+          - Error rate time series: ratio of `status_code="STATUS_CODE_ERROR"` calls to total
+          - p95 latency time series: `histogram_quantile(0.95, rate(pipeline_duration_bucket[5m]))` by service
+          - Requests today stat: `increase(pipeline_calls_total{http_route="/jobs"}[24h])`
+          - Errors today stat: `increase(pipeline_calls_total{status_code="STATUS_CODE_ERROR"}[24h])`
+- [ ] 13. Create `infra/grafana/dashboards/data-insights.json`: 5 panels using
+          application metrics from Prometheus:
+          - Word count heatmap: `transcription_word_count_bucket` (Heatmap panel type)
+          - Token usage time series: `rate(indexing_llm_tokens_used_sum[5m])`
+          - Active transcripts gauge: `storage_transcripts_active`
+          - Jobs in flight gauge: `pipeline_jobs_in_flight`
+          - Indexing error rate: `rate(indexing_errors_total[5m])`
+- [ ] 14. Create `infra/grafana/dashboards/pipeline-latency.json`: 4 panels focused
+          on end-to-end and per-stage latency:
+          - End-to-end p50/p95/p99 time series (gateway root span via `spanmetrics`)
+          - Duration heatmap: `pipeline_duration_bucket{service_name="gateway-svc"}`
+          - Per-stage median bar gauge: `histogram_quantile(0.5, ...)` per service
+          - SLO stat: percentage of requests completing under 5 seconds
+- [ ] 15. Update `infra/grafana/dashboards/otel-overview.json`: add a "Dashboards"
+          row with text/links panel pointing to the three new dashboards; bump version.
+- [ ] 16. Verify all four dashboards load without errors in Grafana after
+          `docker compose up`; confirm `spanmetrics` panels show data after running
+          `python scripts/seed.py && curl -X POST http://localhost:8000/jobs ...`
+
+### Tests for new instruments
+
+- [ ] 17. `tests/test_gateway.py`: add tests for `pipeline.jobs_in_flight` counter
+          emission and `gateway.jobs_total` counter with `status` attribute.
+- [ ] 18. `tests/test_transcription.py`: add test for `transcription.word_count`
+          histogram emission.
+- [ ] 19. `tests/test_diarization.py`: add test for
+          `diarization.processing_duration_seconds` histogram emission.
+- [ ] 20. `tests/test_indexing.py`: add test for `indexing.errors_total` counter
+          incremented on simulated failure path.
+- [ ] 21. `tests/test_storage.py`: add test for `storage.transcripts_active`
+          observable gauge reporting correct count after stores.
+
+## Notes
+
+- `spanmetrics` connector generates metric names by joining `namespace` + the
+  span metric kind: `pipeline_calls_total` and `pipeline_duration_bucket`. The
+  `le` labels on the duration histogram are in seconds (floats), matching the
+  bucket boundaries defined in the connector config.
+- The `ObservableGauge` callback is called by the SDK at each metric collection
+  interval, not per request. Register it once at module import time.
+- Exemplars only appear in Prometheus if the scrape interval captures a histogram
+  observation that had an active span context. In the demo this means running at
+  least one pipeline job after stack startup.
+- Dashboard JSON can be created by building each dashboard in the Grafana UI and
+  using Dashboard → Share → Export → Save to file, then committing the result to
+  `infra/grafana/dashboards/`. This is more reliable than hand-authoring the JSON.
