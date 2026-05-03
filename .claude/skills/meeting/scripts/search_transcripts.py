@@ -32,7 +32,8 @@ def main() -> None:
 
     if query:
         matches = [
-            t for t in transcripts
+            t
+            for t in transcripts
             if query in " ".join(t.get("tags", [])).lower()
             or query in t.get("filename", "").lower()
             or query in t.get("summary", "").lower()

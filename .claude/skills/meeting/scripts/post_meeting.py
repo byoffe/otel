@@ -17,15 +17,15 @@ GATEWAY_URL = "http://localhost:8000/jobs"
 # ── Claude fills this in ────────────────────────────────────────────────────
 PAYLOAD: dict = {
     "filename": "TOPIC-SLUG-YYYY-MM-DD.json",
-    "duration_seconds": 0,          # estimate: total_word_count / 2.5
+    "duration_seconds": 0,  # estimate: total_word_count / 2.5
     "content": {
-        "text": "",                  # full conversation, "Speaker: text\n" per turn
+        "text": "",  # full conversation, "Speaker: text\n" per turn
         "speakers": [
             # {"name": "Alice", "word_count": 312},
             # {"name": "Bob",   "word_count": 189},
         ],
-        "tags": [],                  # 3-6 lowercase hyphenated strings
-        "summary": "",               # 1-2 sentence outcome
+        "tags": [],  # 3-6 lowercase hyphenated strings
+        "summary": "",  # 1-2 sentence outcome
     },
 }
 # ───────────────────────────────────────────────────────────────────────────
