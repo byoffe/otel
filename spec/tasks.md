@@ -216,12 +216,12 @@
 
 ### pipeline-analyst MCP server
 
-- [ ] 1. Create `mcp_server/requirements.txt`: `fastmcp>=2.0`, `httpx>=0.27.0,<1.0`,
+- ✅ 1. Create `services/mcp_server/requirements.txt`: `fastmcp>=2.0`, `httpx>=0.27.0,<1.0`,
          `opentelemetry-sdk>=1.24.0`, `opentelemetry-exporter-otlp-proto-grpc>=1.24.0`
-- [ ] 2. Create `mcp_server/Dockerfile`: `FROM python:3.12-slim`; build context = repo root;
-         `COPY otel_common/ ./otel_common/`; install requirements; `COPY mcp_server/ ./mcp_server/`;
+- ✅ 2. Create `services/mcp_server/Dockerfile`: `FROM python:3.12-slim`; build context = repo root;
+         `COPY otel_common/ ./otel_common/`; install requirements; `COPY services/mcp_server/ ./mcp_server/`;
          `CMD ["python", "-m", "mcp_server"]`
-- [ ] 3. Create `mcp_server/__init__.py`: FastMCP app `pipeline-analyst`; `init_otel("mcp-server")`;
+- ✅ 3. Create `services/mcp_server/__init__.py`: FastMCP app `pipeline-analyst`; `init_otel("mcp-server")`;
          `TEMPO_URL` from env (default `http://localhost:3200`); 4 tools, each wrapped in
          `tracer.start_as_current_span(...)` with `mcp.tool` + result-count attributes:
          - `list_recent_jobs(limit=20)`: `GET /api/search?q={rootName="POST /jobs"}&limit=N`
@@ -229,37 +229,37 @@
            spans per service; return `{total_ms, services: {svc: dur_ms, gateway-overhead-ms: N}}`
          - `find_slow_jobs(threshold_ms=3000)`: TraceQL `{rootName="POST /jobs" && duration > Nms}`
          - `find_error_jobs()`: TraceQL `{rootName="POST /jobs" && status=error}`
-- [ ] 4. Create `mcp_server/__main__.py`: read `MCP_TRANSPORT` (default `stdio`);
+- ✅ 4. Create `services/mcp_server/__main__.py`: read `MCP_TRANSPORT` (default `stdio`);
          call `mcp.run()` or `mcp.run(transport="sse", host="0.0.0.0", port=8005)`;
          `finally: force_flush()` on TracerProvider and MeterProvider
 
 ### Seed script
 
-- [ ] 5. Create `scripts/seed.py`: define 5 diverse transcript dicts (different topics,
+- ✅ 5. Create `scripts/seed.py`: define 5 diverse transcript dicts (different topics,
          tags, speakers); post each to `STORAGE_URL/transcripts` via `urllib.request`;
          print created IDs and filenames
 
 ### Docker Compose and MCP config
 
-- [ ] 6. Add `pipeline-analyst` service to `docker-compose.yml`: build at repo root,
-         `dockerfile: mcp_server/Dockerfile`; env `MCP_TRANSPORT=sse`, `MCP_PORT=8005`,
+- ✅ 6. Add `pipeline-analyst` service to `docker-compose.yml`: build at repo root,
+         `dockerfile: services/mcp_server/Dockerfile`; env `MCP_TRANSPORT=sse`, `MCP_PORT=8005`,
          `TEMPO_URL=http://tempo:3200`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317`;
          port 8005; `depends_on: tempo: condition: service_healthy`
-- [ ] 7. Add `mcp-grafana` service to `docker-compose.yml` under `profiles: [mcp-grafana]`:
+- ✅ 7. Add `mcp-grafana` service to `docker-compose.yml` under `profiles: [mcp-grafana]`:
          `image: ghcr.io/grafana/mcp-grafana:latest`; env `GRAFANA_URL=http://grafana:3000`,
          `GRAFANA_USERNAME=admin`, `GRAFANA_PASSWORD=admin`; port 3001;
          `depends_on: grafana`
-- [ ] 8. Create `.claude/mcp.json`: register `pipeline-analyst` (stdio, `python -m mcp_server`,
+- ✅ 8. Create `.mcp.json` at repo root: register `pipeline-analyst` (stdio, `python -m services.mcp_server`,
          `TEMPO_URL=http://localhost:3200`); register `grafana` (stdio via
          `docker run --rm -i -e GRAFANA_URL=http://host.docker.internal:3000 ... ghcr.io/grafana/mcp-grafana:latest`)
-- [ ] 9. Add `fastmcp>=2.0` and `httpx>=0.27.0,<1.0` to `[project.optional-dependencies] dev`
-         in `pyproject.toml` so `python -m mcp_server` works from the dev venv
+- ✅ 9. Add `fastmcp>=2.0` and `httpx>=0.27.0,<1.0` to `[project.optional-dependencies] dev`
+         in `pyproject.toml` so `python -m services.mcp_server` works from the dev venv
 
 ### Verification
 
 - [ ] 10. `python scripts/seed.py` — confirm 5 IDs printed and
           `Invoke-RestMethod http://localhost:8004/transcripts` returns 5 records
-- [ ] 11. `python -m mcp_server` (in a separate terminal) — confirm it starts without error
+- [ ] 11. `python -m services.mcp_server` (in a separate terminal) — confirm it starts without error
           and exits cleanly (stdio mode)
 - [ ] 12. Ask Claude: "list recent pipeline jobs and tell me which was slowest" — confirm
           `list_recent_jobs` and `get_trace_breakdown` tools are invoked
@@ -271,8 +271,9 @@
 
 ## Notes
 
-- `python -m mcp_server` works from the repo root because `mcp_server/` is a package
-  (has `__init__.py` + `__main__.py`). `TEMPO_URL` defaults to `http://localhost:3200`.
+- `mcp_server` was relocated from the repo root to `services/mcp_server/` for structural
+  consistency; invoked as `python -m services.mcp_server`. `services/__init__.py` makes
+  `services` a proper package so the module path resolves.
 - `force_flush()` in `__main__.py` is critical for stdio mode: the process exits
   after each tool call and BatchSpanProcessor won't drain naturally.
 - `get_trace_breakdown` filters to `SPAN_KIND_SERVER` spans to get clean per-service
@@ -281,3 +282,60 @@
   `gateway_total - sum(downstream_server_spans)`.
 - The `grafana` MCP entry uses `docker run --rm -i` (stdio), which pulls the image on
   first use. On Linux hosts, replace `host.docker.internal` with the host LAN IP.
+
+---
+
+## Commit 3.5 — CI Hardening + Unit Tests
+
+### Structural cleanup
+
+- ✅ 1. Move `mcp_server/` → `services/mcp_server/` (`git mv` to preserve history); update
+         Dockerfile COPY paths, `.mcp.json` module reference, `docker-compose.yml` dockerfile path
+- ✅ 2. Create `services/__init__.py` (empty) so `services` is a proper package and
+         `python -m services.mcp_server` resolves correctly
+
+### pyproject.toml upgrades
+
+- ✅ 3. Bump `pythonVersion` to `"3.14"` in `[tool.pyright]`; add `requires-python = ">=3.14"`
+         to `[project]`; add service instrumentation packages to core deps so pyright can
+         resolve them (`opentelemetry-instrumentation-fastapi`, `opentelemetry-instrumentation-httpx`)
+- ✅ 4. Add `pytest>=8.0` to `[project.optional-dependencies] dev`
+- ✅ 5. Add `[tool.pytest.ini_options]` with `testpaths = ["tests"]` and
+         `pythonpath = [".", "tests"]`
+
+### CI
+
+- ✅ 6. Add `pytest` step to `.github/workflows/ci.yml` after the pyright step; use
+         `python-version-file: ".python-version"` (Python 3.14.4) for consistent interpreter
+
+### Unit tests
+
+- ✅ 7. Create `tests/conftest.py`: install `InMemorySpanExporter` + `InMemoryMetricReader`
+         backed providers at module level before any service import; patch `otel_common.init_otel`;
+         expose `span_exporter` and `metric_reader` fixtures with per-test state isolation
+- ✅ 8. Create `tests/helpers.py`: `find_span(exporter, **attrs)` and
+         `emitted_metric_names(reader)` shared assertion helpers
+- ✅ 9. Create `tests/test_transcription.py`: span attribute (`transcript.word_count`),
+         histogram emission (`transcription.duration_seconds`), response contract tests
+- ✅ 10. Create `tests/test_diarization.py`: span attribute (`diarization.speaker_count`),
+          counter emission (`diarization.segments_total`), response contract tests
+- ✅ 11. Create `tests/test_indexing.py`: span attributes (`indexing.model`, `indexing.tokens_used`),
+          histogram emission (`indexing.llm_tokens_used`), ERROR status on simulated failure,
+          503 response on error path
+- ✅ 12. Create `tests/test_storage.py`: span attribute (`storage.transcript_id`), counter
+          emission (`storage.transcripts_stored_total`), CRUD response contract tests
+- ✅ 13. Create `tests/test_gateway.py`: span created for job request, all four downstream
+          services called in pipeline order, 502 on transcription failure, 502 on storage failure
+- ✅ 14. Create `tests/test_otel_common.py`: `_TraceContextFilter` injects hex trace/span IDs
+          onto LogRecord; `_JsonFormatter` emits valid JSON with required fields
+
+## Notes
+
+- `conftest.py` providers must be installed at module level — before any service module
+  imports — so service-level `get_tracer()`/`get_meter()` calls land on the in-memory
+  backends rather than the default no-op providers.
+- `tests/helpers.py` is a separate module (not functions inside `conftest.py`) because
+  direct `from conftest import` is non-standard pytest usage that fails in CI when
+  `tests/` is not on `sys.path`; the `pythonpath` setting in pytest config resolves this.
+- Metric value assertions use `>=` intentionally — metric values derive from fake
+  simulation data and should not be pinned to internal formula results.
