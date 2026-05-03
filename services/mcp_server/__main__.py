@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import os
 
-from opentelemetry import metrics, trace
-
 from mcp_server import mcp
+from opentelemetry import metrics, trace
 
 
 def _flush_providers() -> None:
