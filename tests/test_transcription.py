@@ -1,6 +1,6 @@
 """Tests for the transcription service — span attributes and metric emission."""
 
-from conftest import emitted_metric_names, find_span
+from helpers import emitted_metric_names, find_span
 from fastapi.testclient import TestClient
 
 from services.transcription.main import app

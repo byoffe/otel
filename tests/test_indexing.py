@@ -1,6 +1,6 @@
 """Tests for the indexing service — span attributes, metric emission, error status."""
 
-from conftest import emitted_metric_names, find_span
+from helpers import emitted_metric_names, find_span
 from fastapi.testclient import TestClient
 from opentelemetry.trace import StatusCode
 
