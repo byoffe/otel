@@ -15,7 +15,8 @@
         "-e", "GRAFANA_URL=http://host.docker.internal:3000",
         "-e", "GRAFANA_USERNAME=admin",
         "-e", "GRAFANA_PASSWORD=admin",
-        "ghcr.io/grafana/mcp-grafana:latest"
+        "grafana/mcp-grafana:latest",
+        "-t", "stdio"
       ]
     }
   }

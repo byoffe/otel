@@ -1,0 +1,6 @@
+{
+  "name": "otel-transcribe",
+  "image": "mcr.microsoft.com/devcontainers/python:3.14",
+  "postCreateCommand": "pip install -e '.[dev]'",
+  "remoteUser": "vscode"
+}

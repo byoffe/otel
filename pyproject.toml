@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "otel-transcribe"
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     "opentelemetry-sdk>=1.24",
     "opentelemetry-exporter-otlp-proto-grpc>=1.24",
@@ -33,6 +33,6 @@ select = ["E", "F", "I"]
 "scripts/seed.py" = ["E501"]  # transcript text strings are intentionally long
 
 [tool.pyright]
-pythonVersion = "3.12"
+pythonVersion = "3.14"
 typeCheckingMode = "standard"
 reportPrivateImportUsage = false
