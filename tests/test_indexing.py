@@ -79,3 +79,9 @@ def test_simulated_failure_returns_503(monkeypatch):
     monkeypatch.setattr(indexing_module, "_ERROR_RATE", 1.0)
     r = client.post("/index", json={**BAKED_BODY, "baked_tags": None, "baked_summary": None})
     assert r.status_code == 503
+
+
+def test_errors_total_incremented_on_failure(metric_reader, monkeypatch):
+    monkeypatch.setattr(indexing_module, "_ERROR_RATE", 1.0)
+    client.post("/index", json={**BAKED_BODY, "baked_tags": None, "baked_summary": None})
+    assert "indexing.errors_total" in emitted_metric_names(metric_reader)

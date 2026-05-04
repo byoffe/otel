@@ -14,6 +14,7 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics._internal.exemplar import AlwaysOnExemplarFilter
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -81,7 +82,11 @@ def _setup_traces(endpoint: str, resource: Resource) -> None:
 
 def _setup_metrics(endpoint: str, resource: Resource) -> None:
     reader = PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=endpoint))
-    provider = MeterProvider(resource=resource, metric_readers=[reader])
+    provider = MeterProvider(
+        resource=resource,
+        metric_readers=[reader],
+        exemplar_filter=AlwaysOnExemplarFilter(),
+    )
     metrics.set_meter_provider(provider)
 
 

@@ -35,15 +35,32 @@ exporters:
       instance: false
       level: true    # maps log severity → level label
 
+# spanmetrics reads the traces pipeline and emits RED metrics (rate, error, duration)
+# per service and route — no application code changes required.
+connectors:
+  spanmetrics:
+    namespace: pipeline
+    histogram:
+      explicit:
+        buckets: [100ms, 250ms, 500ms, 1s, 2s, 5s, 10s]
+    dimensions:
+      - name: service.name
+      - name: http.route
+      - name: http.status_code
+    metrics_flush_interval: 15s
+    exemplars:
+      enabled: true
+
 service:
   extensions: [health_check]
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlp/tempo]
+      # spanmetrics acts as a connector: it consumes traces and produces metrics
+      exporters: [otlp/tempo, spanmetrics]
     metrics:
-      receivers: [otlp]
+      receivers: [otlp, spanmetrics]
       processors: [batch]
       exporters: [prometheus]
     logs:

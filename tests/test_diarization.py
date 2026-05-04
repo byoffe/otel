@@ -77,3 +77,8 @@ def test_segment_count_counts_speaker_turns():
     r = client.post("/diarize", json=BAKED_BODY)
     # 3 lines starting with a known speaker name
     assert r.json()["segment_count"] == 3
+
+
+def test_processing_duration_histogram_emitted(metric_reader):
+    client.post("/diarize", json=BAKED_BODY)
+    assert "diarization.processing_duration_seconds" in emitted_metric_names(metric_reader)

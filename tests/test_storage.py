@@ -90,3 +90,21 @@ def test_list_excludes_full_text():
     items = client.get("/transcripts").json()
     assert len(items) == 1
     assert "text" not in items[0]
+
+
+def test_active_gauge_emitted(metric_reader):
+    client.post("/transcripts", json=TRANSCRIPT)
+    assert "storage.transcripts_active" in emitted_metric_names(metric_reader)
+
+
+def test_active_gauge_reflects_store_size(metric_reader):
+    client.post("/transcripts", json=TRANSCRIPT)
+    data = metric_reader.get_metrics_data()
+    metric = next(
+        m
+        for rm in data.resource_metrics
+        for sm in rm.scope_metrics
+        for m in sm.metrics
+        if m.name == "storage.transcripts_active"
+    )
+    assert metric.data.data_points[0].value == 1

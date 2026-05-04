@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import random
+import time
 from typing import Any
 
 from fastapi import FastAPI
@@ -27,6 +28,11 @@ _segments_counter = meter.create_counter(
     name="diarization.segments_total",
     description="Total speaker segments identified across all requests",
     unit="1",
+)
+_duration_histogram = meter.create_histogram(
+    name="diarization.processing_duration_seconds",
+    description="Wall-clock time for each diarization request",
+    unit="s",
 )
 
 _DELAY_MIN = float(os.environ.get("SIM_DELAY_MIN", "0.2"))
@@ -58,6 +64,7 @@ async def health() -> dict[str, str]:
 
 @app.post("/diarize", response_model=DiarizeResponse)
 async def diarize(body: DiarizeRequest) -> DiarizeResponse:
+    t0 = time.perf_counter()
     await asyncio.sleep(random.uniform(_DELAY_MIN, _DELAY_MAX))
 
     if body.baked_speakers is not None:
@@ -85,6 +92,7 @@ async def diarize(body: DiarizeRequest) -> DiarizeResponse:
         segment_count = random.randint(speaker_count * 3, speaker_count * 8)
 
     _segments_counter.add(segment_count)
+    _duration_histogram.record(time.perf_counter() - t0)
     trace.get_current_span().set_attribute("diarization.speaker_count", speaker_count)
     logger.info(
         "diarization complete",

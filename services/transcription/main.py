@@ -29,6 +29,11 @@ _duration_histogram = meter.create_histogram(
     description="Simulated ASR processing time per request",
     unit="s",
 )
+_word_count_histogram = meter.create_histogram(
+    name="transcription.word_count",
+    description="Distribution of transcript word counts",
+    unit="words",
+)
 
 _DELAY_MIN = float(os.environ.get("SIM_DELAY_MIN", "0.3"))
 _DELAY_MAX = float(os.environ.get("SIM_DELAY_MAX", "0.9"))
@@ -89,6 +94,7 @@ async def transcribe(body: TranscribeRequest) -> TranscribeResponse:
     duration = time.perf_counter() - t0
 
     _duration_histogram.record(duration)
+    _word_count_histogram.record(word_count)
     trace.get_current_span().set_attribute("transcript.word_count", word_count)
     logger.info(
         "transcription complete",
