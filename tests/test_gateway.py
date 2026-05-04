@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
+from helpers import emitted_metric_names
 
 from services.gateway.main import app
 
@@ -114,3 +115,27 @@ def test_storage_failure_returns_502():
     with patch("httpx.AsyncClient", return_value=mock):
         r = client.post("/jobs", json=JOB_REQUEST)
     assert r.status_code == 502
+
+
+# --- metric assertions -------------------------------------------------------
+
+
+def test_jobs_in_flight_emitted(metric_reader):
+    with patch("httpx.AsyncClient", return_value=_mock_pipeline()):
+        client.post("/jobs", json=JOB_REQUEST)
+    assert "pipeline.jobs_in_flight" in emitted_metric_names(metric_reader)
+
+
+def test_jobs_total_emitted_on_success(metric_reader):
+    with patch("httpx.AsyncClient", return_value=_mock_pipeline()):
+        client.post("/jobs", json=JOB_REQUEST)
+    assert "gateway.jobs_total" in emitted_metric_names(metric_reader)
+
+
+def test_jobs_total_emitted_on_error(metric_reader):
+    mock = _mock_pipeline()
+    mock.post.side_effect = None
+    mock.post.return_value = MagicMock(status_code=500, text="down")
+    with patch("httpx.AsyncClient", return_value=mock):
+        client.post("/jobs", json=JOB_REQUEST)
+    assert "gateway.jobs_total" in emitted_metric_names(metric_reader)

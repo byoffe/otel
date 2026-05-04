@@ -28,6 +28,11 @@ _token_histogram = meter.create_histogram(
     description="Simulated LLM token usage per indexing request",
     unit="tokens",
 )
+_error_counter = meter.create_counter(
+    name="indexing.errors_total",
+    description="Total simulated LLM failures",
+    unit="1",
+)
 
 _DELAY_MIN = float(os.environ.get("SIM_DELAY_MIN", "0.4"))
 _DELAY_MAX = float(os.environ.get("SIM_DELAY_MAX", "1.2"))
@@ -90,6 +95,7 @@ async def index(body: IndexRequest) -> IndexResponse:
         tokens_used = len(body.text.split()) * 2  # rough estimate: ~2 tokens per word
     else:
         if random.random() < _ERROR_RATE:
+            _error_counter.add(1)
             span = trace.get_current_span()
             span.set_status(trace.StatusCode.ERROR, "simulated LLM timeout")
             logger.error(

@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from opentelemetry import metrics, trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.metrics import Observation
 from pydantic import BaseModel
 
 from otel_common import init_otel
@@ -29,6 +30,13 @@ _stored_counter = meter.create_counter(
 )
 
 _store: dict[str, dict[str, Any]] = {}
+
+meter.create_observable_gauge(
+    name="storage.transcripts_active",
+    description="Current number of transcripts in the in-memory store",
+    unit="1",
+    callbacks=[lambda _options: [Observation(len(_store))]],
+)
 
 
 class TranscriptIn(BaseModel):

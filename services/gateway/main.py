@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from opentelemetry import metrics
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from pydantic import BaseModel
@@ -25,6 +26,17 @@ app = FastAPI(title=SERVICE_NAME)
 FastAPIInstrumentor.instrument_app(app, excluded_urls="health")
 
 logger = logging.getLogger(SERVICE_NAME)
+meter = metrics.get_meter(SERVICE_NAME)
+_jobs_in_flight = meter.create_up_down_counter(
+    name="pipeline.jobs_in_flight",
+    description="Number of pipeline jobs currently in progress",
+    unit="1",
+)
+_jobs_total = meter.create_counter(
+    name="gateway.jobs_total",
+    description="Total pipeline jobs completed, by status",
+    unit="1",
+)
 
 _TRANSCRIPTION_URL = os.environ.get("TRANSCRIPTION_URL", "http://localhost:8001")
 _DIARIZATION_URL = os.environ.get("DIARIZATION_URL", "http://localhost:8002")
@@ -65,7 +77,19 @@ async def create_job(body: JobRequest) -> JobResponse:
     logger.info("job started", extra={"job_id": job_id, "audio_file": body.filename})
 
     baked = body.content
+    _jobs_in_flight.add(1)
+    try:
+        return await _run_pipeline(job_id, body, baked)
+    except HTTPException:
+        _jobs_total.add(1, {"status": "error"})
+        raise
+    finally:
+        _jobs_in_flight.add(-1)
 
+
+async def _run_pipeline(
+    job_id: str, body: JobRequest, baked: ConversationContent | None
+) -> JobResponse:
     async with httpx.AsyncClient(timeout=30.0) as client:
         # 1 — transcribe
         transcribe_payload: dict[str, Any] = {
@@ -126,4 +150,5 @@ async def create_job(body: JobRequest) -> JobResponse:
         "job complete",
         extra={"job_id": job_id, "transcript_id": transcript_id},
     )
+    _jobs_total.add(1, {"status": "success"})
     return JobResponse(job_id=job_id, transcript_id=transcript_id, status="complete")

@@ -4,7 +4,11 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
   "id": null,
-  "links": [],
+  "links": [
+    { "keepTime": true, "title": "Pipeline RED", "tooltip": "Rate / Error / Duration", "type": "link", "url": "/d/pipeline-red" },
+    { "keepTime": true, "title": "Data Insights", "tooltip": "Word count, tokens, active transcripts", "type": "link", "url": "/d/data-insights" },
+    { "keepTime": true, "title": "Pipeline Latency", "tooltip": "End-to-end latency and SLO", "type": "link", "url": "/d/pipeline-latency" }
+  ],
   "panels": [
     {
       "datasource": { "type": "tempo", "uid": "tempo" },
@@ -97,6 +101,6 @@
   "timezone": "browser",
   "title": "OTEL Overview",
   "uid": "otel-overview",
-  "version": 4,
+  "version": 5,
   "weekStart": ""
 }

@@ -53,6 +53,11 @@ def test_histogram_records_one_observation_per_request(metric_reader):
     assert total_count >= 2
 
 
+def test_word_count_histogram_emitted(metric_reader):
+    client.post("/transcribe", json=BAKED)
+    assert "transcription.word_count" in emitted_metric_names(metric_reader)
+
+
 # --- interaction assertions -------------------------------------------------
 
 
